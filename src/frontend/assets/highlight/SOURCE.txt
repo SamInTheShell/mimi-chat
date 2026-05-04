@@ -1,0 +1,20 @@
+highlight.js v11.10.0 — https://github.com/highlightjs/highlight.js
+License: BSD-3-Clause (see LICENSE.txt).
+
+Bundle:
+  highlight.min.js
+    Pre-built UMD bundle (the "common" set, ~36 most-used languages including
+    markdown, diff, javascript, typescript, python, bash, json, yaml, html,
+    css, c, cpp, rust, go, sql, …).
+    Fetched from: https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.10.0/highlight.min.js
+
+License copy:
+  LICENSE.txt
+    Verbatim copy of https://raw.githubusercontent.com/highlightjs/highlight.js/11.10.0/LICENSE
+
+Theme:
+  hljs-theme.css is hand-written for Mimi against project CSS variables
+  (theme.css). It is NOT a stock highlight.js theme — no upstream theme is
+  vendored. The class names (.hljs, .hljs-keyword, .hljs-string, …) match
+  highlight.js' canonical token taxonomy so any future stock theme would also
+  work as a drop-in.

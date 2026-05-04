@@ -1,0 +1,20 @@
+Asset: JetBrains Mono (WOFF2 subsets used by Mimi theme.css)
+
+License: SIL Open Font License 1.1 — see LICENSE.txt in this directory.
+
+Upstream / download:
+  Project repository — https://github.com/JetBrains/JetBrainsMono
+  Google Fonts specimen — https://fonts.google.com/specimen/JetBrains+Mono
+  CSS2 API (subset selection) — https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap
+  Served files (gstatic) — https://fonts.gstatic.com/s/jetbrainsmono/v24/
+
+Bundled files (this folder):
+  jetbrains-mono.css — @font-face rules with local url(./…) references
+  Six .woff2 files   — cyrillic-ext, cyrillic, greek, vietnamese, latin-ext, latin
+                       (same physical files referenced for weights 400, 500, 600)
+
+Notes:
+  Binary .woff2 files were downloaded from fonts.gstatic.com using the CSS
+  returned by the Google Fonts API for a current Chrome user-agent (May 2026).
+  A verbatim combined API response (DM Sans + JetBrains Mono) is kept at
+  ../google-fonts-api-response.css in the parent assets folder.

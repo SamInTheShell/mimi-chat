@@ -1,0 +1,113 @@
+/* Mimi hljs theme — uses project CSS variables from theme.css.
+   Matches highlight.js' canonical token class names so a stock theme could be
+   dropped in later if desired. */
+
+.hljs {
+  color: var(--path);
+  background: transparent;
+}
+
+/* ── Comments / quotes ───────────────────────────── */
+.hljs-comment,
+.hljs-quote {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ── Keywords, control flow, declarations ────────── */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-section,
+.hljs-doctag,
+.hljs-name,
+.hljs-tag {
+  color: var(--accent);
+}
+.hljs-keyword,
+.hljs-section {
+  font-weight: 600;
+}
+
+/* ── Built-ins, types, classes ───────────────────── */
+.hljs-built_in,
+.hljs-type,
+.hljs-class .hljs-title,
+.hljs-title.class_,
+.hljs-title.class_.inherited__ {
+  color: var(--teal);
+}
+
+/* ── Functions, titles ───────────────────────────── */
+.hljs-title,
+.hljs-title.function_,
+.hljs-function .hljs-title {
+  color: var(--violet);
+}
+
+/* ── Strings, regex, links ───────────────────────── */
+.hljs-string,
+.hljs-meta .hljs-string,
+.hljs-regexp,
+.hljs-link {
+  color: var(--amber);
+}
+
+/* ── Numbers, symbols, operators ─────────────────── */
+.hljs-number,
+.hljs-symbol,
+.hljs-operator {
+  color: var(--rose);
+}
+
+/* ── Variables, params, properties ───────────────── */
+.hljs-variable,
+.hljs-template-variable,
+.hljs-params,
+.hljs-property {
+  color: var(--text);
+}
+
+/* ── HTML/JSON/CSS structural ────────────────────── */
+.hljs-attr,
+.hljs-attribute,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id,
+.hljs-selector-pseudo {
+  color: var(--orange);
+}
+
+/* ── Meta (preproc, directives, decorators) ──────── */
+.hljs-meta,
+.hljs-meta .hljs-keyword,
+.hljs-template-tag {
+  color: var(--text-secondary);
+}
+.hljs-meta .hljs-keyword {
+  font-weight: 600;
+}
+
+/* ── Markdown emphasis / strong / bullets / code ─── */
+.hljs-strong { font-weight: 700; color: var(--text); }
+.hljs-emphasis { font-style: italic; color: var(--text); }
+.hljs-bullet { color: var(--accent); }
+.hljs-code { color: var(--teal); }
+
+/* ── Diff (used for ```diff fences) ──────────────── */
+.hljs-addition {
+  color: var(--green);
+  background: var(--green-muted);
+  display: inline-block;
+  width: 100%;
+}
+.hljs-deletion {
+  color: var(--rose);
+  background: var(--rose-muted);
+  display: inline-block;
+  width: 100%;
+}
+
+/* Render hljs inside chat <pre><code> with the existing pre/code shell.
+   markdown.css already styles .md-content pre / .md-content pre code; this
+   only sets the per-token colors above. */

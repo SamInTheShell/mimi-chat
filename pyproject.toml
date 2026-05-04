@@ -1,0 +1,27 @@
+[project]
+name = "pywebapp"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "pywebview>=5.0",
+    "PySide6>=6.0",
+    "qtpy>=2.0",
+    "pathspec>=0.12",
+]
+
+[project.scripts]
+mimi-chat = "src.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/frontend" = "src/frontend"
+"src/prompts" = "src/prompts"
+

@@ -1,0 +1,5387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mimi</title>
+<link rel="stylesheet" href="assets/dm-sans/dm-sans.css">
+<link rel="stylesheet" href="assets/jetbrains-mono/jetbrains-mono.css">
+<link rel="stylesheet" href="theme.css">
+<link rel="stylesheet" href="markdown.css">
+<link rel="stylesheet" href="assets/highlight/hljs-theme.css">
+</head>
+<body>
+<div id="app">
+
+<!-- ═══════════ SETUP ═══════════ -->
+<div class="screen active" id="screen-setup">
+  <div class="hdr">
+    <div class="hdr-wordmark">Mimi · v1</div>
+    <button type="button" class="gear-btn" onclick="goSettings()">Settings</button>
+  </div>
+  <div class="setup-scroll">
+
+    <div class="form-label">Provider</div>
+    <div class="provider-grid">
+      <div class="prov-card" data-prov="openai" onclick="selectProvider(this)">
+        <div class="prov-name">OpenAI compat.</div>
+        <div class="prov-sub">custom endpoint</div>
+      </div>
+      <div class="prov-card sel" data-prov="ollama" onclick="selectProvider(this)">
+        <div class="prov-name">Ollama</div>
+        <div class="prov-sub">localhost:11434</div>
+      </div>
+      <div class="prov-card" data-prov="lmstudio" onclick="selectProvider(this)">
+        <div class="prov-name">LM Studio</div>
+        <div class="prov-sub">localhost:1234</div>
+      </div>
+    </div>
+
+    <div class="form-label">API Endpoint</div>
+    <input type="text" class="f-input" id="api-endpoint" placeholder="http://localhost:11434/v1">
+
+    <div class="form-label-row">
+      <span class="form-label">Model</span>
+      <button type="button" class="refresh-models-btn" id="btn-refresh-models" onclick="refreshModelsFromPicker(event)">Refresh</button>
+    </div>
+    <input type="search" id="model-search-setup" class="f-input model-search-input" placeholder="Search models…" autocomplete="off" oninput="onModelSearchSetupInput()" />
+    <div class="model-list-box" id="model-list"></div>
+
+    <div class="form-label">System Prompt</div>
+    <div class="sel-wrap" id="prompt-dd-wrap">
+      <button type="button" class="f-select" id="prompt-dd-btn" onclick="togglePromptDD(event)" style="text-align:left">
+        <span id="prompt-dd-btn-txt">System Prompt</span>
+      </button>
+      <div class="sel-arrow">▲</div>
+      <div class="dd dd-popover-up" id="prompt-dd">
+        <div class="dd-hdr">Select system prompt</div>
+        <div class="dd-scroll" id="prompt-dd-scroll"></div>
+      </div>
+    </div>
+
+    <div class="form-label">Project Directory <span class="form-label-req" aria-hidden="true">required</span></div>
+    <div class="dir-wrap" id="dir-wrap">
+      <div class="dir-row">
+        <input type="text" class="f-input" id="dir-input" placeholder="~/path/to/project" style="flex:1" required aria-required="true" aria-describedby="dir-err">
+        <button class="dir-btn" onclick="toggleRecent(event)">Recent ▴</button>
+        <button class="dir-btn" onclick="browseDir()">Browse…</button>
+      </div>
+      <div class="setup-err" id="dir-err" role="alert" aria-live="polite" hidden></div>
+      <div class="dd dd-popover-up" id="recent-dd">
+        <div class="dd-hdr">Recently opened</div>
+        <div class="dd-scroll" id="recent-dd-scroll"></div>
+      </div>
+    </div>
+
+    <button class="start-btn" onclick="startChat()" title="Start session (Ctrl+Enter)">START SESSION →</button>
+  </div>
+</div>
+
+<!-- ═══════════ CHAT ═══════════ -->
+<div class="screen" id="screen-chat">
+  <div class="hdr">
+    <div class="hdr-label">Mimi · <span class="hdr-sub">v1</span></div>
+    <button type="button" class="cwd-btn" id="chat-cwd-btn" onclick="changeProjectDirFromChat()" title="Change project directory">
+      <span class="cwd-path" id="chat-cwd-path">—</span>
+    </button>
+    <button class="badge-btn hdr-model-badge" id="model-badge" onclick="openModelPicker()">⇄ <span id="model-badge-txt">—</span></button>
+    <button type="button" class="gear-btn" onclick="goSettings()">Settings</button>
+  </div>
+
+  <div class="messages-area" id="messages-area"></div>
+
+  <div class="chat-dock" id="chat-dock">
+    <div class="scroll-btn-row">
+      <button type="button" class="scroll-btn" id="scroll-btn" onclick="onScrollBtnClick()" title="Scroll to latest">↓</button>
+    </div>
+    <div class="input-wrap" id="input-wrap">
+    <div class="input-box">
+      <div class="composer-dropdowns" id="composer-dropdowns">
+        <div class="slash-popup" id="slash-popup"></div>
+        <div class="model-picker" id="model-picker">
+          <div class="picker-hdr picker-hdr-split">
+            <span>SELECT MODEL</span>
+            <span class="picker-hdr-right">
+              <button type="button" class="refresh-models-btn picker-refresh-btn" id="picker-models-refresh" onclick="refreshModelsFromPicker(event)">↻ Refresh</button>
+              <span class="picker-hint">↑↓ · ↵ · esc</span>
+            </span>
+          </div>
+          <input type="search" id="model-search-picker" class="f-input model-search-input picker-model-search" placeholder="Search models…" autocomplete="off" oninput="onModelSearchPickerInput()" onkeydown="handleModelPickerSearchKey(event)" />
+          <div id="picker-list"></div>
+        </div>
+        <div class="model-picker" id="prompt-picker">
+          <div class="picker-hdr">
+            <span>SELECT SYSTEM PROMPT</span>
+            <span class="picker-hint">↑↓ · ↵ select · esc</span>
+          </div>
+          <div id="prompt-picker-list"></div>
+        </div>
+      </div>
+      <div class="msg-ta is-empty" id="msg-input"
+        contenteditable="true"
+        role="textbox"
+        aria-multiline="true"
+        spellcheck="true"
+        data-placeholder="message  ·  / for commands  ·  shift+enter for newline"
+        onkeydown="handleKey(event)"
+        oninput="handleInput()"
+        onpaste="handlePaste(event)"></div>
+      <div class="input-bar">
+        <button class="badge-btn on" id="think-badge" onclick="toggleThink()" title="Toggle extended thinking (Ctrl+T)">◈ thinking</button>
+        <button type="button" class="badge-btn" id="auto-edit-badge" onclick="toggleAutoAcceptEdits()" title="When on, every tool runs without a confirmation prompt (still sandboxed to the project directory). (Shift+Tab)">✎ Accept Edits</button>
+        <button class="badge-btn on" id="prompt-badge" onclick="openPromptPicker()" title="Open the system prompt picker (Ctrl+P)"><span id="prompt-badge-txt">Default Assistant</span></button>
+        <div class="ctx-badge" id="ctx-badge" title="Context use vs model limit"><b>—</b> · — / — tok</div>
+        <button type="button" class="send-btn send-stop" id="stop-btn" onclick="cancelInFlightChat()" title="Stop the current reply (Esc)" hidden>stop</button>
+        <button type="button" class="send-btn" id="send-btn" onclick="sendMessage()">send</button>
+      </div>
+    </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ SETTINGS ═══════════ -->
+<div class="screen" id="screen-settings">
+  <div class="settings-hdr">
+    <button class="back-btn" onclick="goBack()">← back</button>
+    <div class="settings-title">settings</div>
+    <button class="back-btn settings-devtools-btn" onclick="openDevTools()" title="Open Chromium DevTools attached to this window">DevTools</button>
+  </div>
+  <div class="stabs">
+    <div class="stab active" onclick="switchTab('prompts',this)">System Prompts</div>
+    <div class="stab" onclick="switchTab('sampling',this)">Sampling</div>
+    <div class="stab" onclick="switchTab('tools',this)">Tools</div>
+    <div class="stab" onclick="switchTab('ignore',this)">Ignore</div>
+  </div>
+  <div class="settings-body">
+
+    <div class="settings-pane active" id="pane-prompts">
+      <div class="prompt-manager">
+        <aside class="prompt-list-pane">
+          <div class="prompt-list-toolbar">
+            <button type="button" class="act-btn" onclick="addSystemPrompt()">+ New</button>
+            <button type="button" class="act-btn" id="prompt-clone-btn" onclick="cloneSystemPrompt()">Clone</button>
+            <button type="button" class="act-btn del" id="prompt-delete-btn" onclick="deleteSelectedPrompt()">Delete</button>
+          </div>
+          <div class="prompt-list" id="prompts-list"></div>
+        </aside>
+        <section class="prompt-editor-pane" id="prompt-editor-pane"></section>
+      </div>
+    </div>
+
+    <div class="settings-pane" id="pane-sampling">
+      <div class="sec-hdr" style="margin-top:0"><div class="sec-title">Sampling</div></div>
+      <div class="card" id="sampling-card">
+        <div class="tool-row sampling-row">
+          <div class="tool-info">
+            <div class="tool-name">Temperature</div>
+            <div class="tool-desc">Randomness of token choice (typical 0–1).</div>
+          </div>
+          <input type="number" class="f-input sampling-num" step="0.05" min="0" max="2" id="samp-temperature" oninput="syncSamplingField('temperature', this.value)" />
+        </div>
+        <div class="tool-row sampling-row">
+          <div class="tool-info">
+            <div class="tool-name">Top-p</div>
+            <div class="tool-desc">Nucleus sampling mass (0–1).</div>
+          </div>
+          <input type="number" class="f-input sampling-num" step="0.05" min="0" max="1" id="samp-topP" oninput="syncSamplingField('topP', this.value)" />
+        </div>
+        <div class="tool-row sampling-row">
+          <div class="tool-info">
+            <div class="tool-name">Top-k</div>
+            <div class="tool-desc">Limit to the k most likely tokens (llama.cpp–style backends).</div>
+          </div>
+          <input type="number" class="f-input sampling-num" step="1" min="0" id="samp-topK" oninput="syncSamplingField('topK', this.value)" />
+        </div>
+        <div class="tool-row sampling-row">
+          <div class="tool-info">
+            <div class="tool-name">Min-p</div>
+            <div class="tool-desc">Dynamic probability floor relative to the top token.</div>
+          </div>
+          <input type="number" class="f-input sampling-num" step="0.01" min="0" max="1" id="samp-minP" oninput="syncSamplingField('minP', this.value)" />
+        </div>
+        <div class="tool-row sampling-row">
+          <div class="tool-info">
+            <div class="tool-name">Repeat penalty</div>
+            <div class="tool-desc">Discourages repeating tokens (1 = off for many servers).</div>
+          </div>
+          <input type="number" class="f-input sampling-num" step="0.05" min="0" max="2" id="samp-repeatPenalty" oninput="syncSamplingField('repeatPenalty', this.value)" />
+        </div>
+      </div>
+      <p class="static-hint">These fields are merged into each <code>/v1/chat/completions</code> request. Backends that do not support a field usually ignore it.</p>
+      <button type="button" class="act-btn" style="margin-top:10px" onclick="resetSamplingDefaults()">Restore defaults</button>
+    </div>
+
+    <div class="settings-pane" id="pane-tools">
+      <div class="sec-hdr" style="margin-top:0">
+        <div class="sec-title">Read limits</div>
+        <button type="button" class="act-btn" onclick="resetReadLimitsToDefaults()">Restore default</button>
+      </div>
+      <div class="card">
+        <div class="tool-row sampling-row">
+          <div class="tool-info">
+            <div class="tool-name"><code>read_file</code> token cap</div>
+            <div class="tool-desc">If a read would return more than this estimated tokens, the call is refused so the model re-reads in parts via <code>offset</code> and <code>limit</code>. Default: 10000.</div>
+          </div>
+          <input type="number" class="f-input sampling-num" min="100" step="500"
+            id="read-token-limit" oninput="syncReadTokenLimit(this.value)" />
+        </div>
+      </div>
+
+      <div class="sec-hdr">
+        <div class="sec-title">Built-in Tools</div>
+        <button type="button" class="act-btn" onclick="resetToolPermsToDefaults()">Restore defaults</button>
+      </div>
+      <p class="static-hint" style="margin:0 0 10px">All tools are sandboxed to the project directory. Defaults: read-only is allowed, mutating tools require permission. The <strong>auto-edit</strong> badge in the chat header bypasses the permission prompt for every tool while it's on.</p>
+      <div class="card" id="builtin-list"></div>
+    </div>
+
+    <div class="settings-pane" id="pane-ignore">
+      <div class="sec-hdr" style="margin-top:0">
+        <div class="sec-title">Ignore Patterns</div>
+      </div>
+      <p class="static-hint" style="margin:0 0 10px">Paths matching these patterns are skipped by file-listing/search tools and refused by file-touching tools. Goal: keep small models from wasting context on caches, deps, and build outputs — not to filter file types. Patterns use <strong>.gitignore</strong> syntax.</p>
+
+      <div class="card">
+        <div class="tool-row">
+          <div class="tool-info">
+            <div class="tool-name">Honor project <code>.gitignore</code></div>
+            <div class="tool-desc">When on, the project's root <code>.gitignore</code> is layered on top of the patterns below.</div>
+          </div>
+          <label class="ignore-toggle">
+            <input type="checkbox" id="ignore-honor-gitignore" onchange="syncIgnoreToggle(this.checked)" />
+            <span></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="sec-hdr">
+        <div class="sec-title">Patterns</div>
+        <button type="button" class="act-btn" onclick="resetIgnorePatternsToDefaults()">Restore defaults</button>
+      </div>
+      <p class="static-hint" style="margin:0 0 10px">One pattern per line. Lines starting with <code>#</code> are comments. Negation (<code>!</code>) and trailing-slash directory rules work like in git. Edit freely — defaults are just the starting point.</p>
+      <textarea class="f-input" id="ignore-patterns"
+        rows="14"
+        spellcheck="false"
+        placeholder="# Examples:
+node_modules/
+dist/
+.env
+.env.*"
+        oninput="syncIgnorePatterns(this.value)"></textarea>
+    </div>
+
+  </div>
+</div>
+
+<!-- Tool permission (ask mode) -->
+<div class="modal-overlay" id="tool-perm-overlay" aria-hidden="true">
+  <div class="modal-card" role="dialog" aria-labelledby="tool-perm-title" aria-modal="true">
+    <div class="modal-title" id="tool-perm-title">Allow tool call?</div>
+    <div class="modal-sub" id="tool-perm-sub"></div>
+    <div class="modal-preview" id="tool-perm-preview"></div>
+    <label class="modal-label" for="tool-perm-deny-reason">Deny reason (optional, sent to the model — Alt+Esc to focus)</label>
+    <textarea class="modal-deny-reason" id="tool-perm-deny-reason" rows="3" placeholder="Explain why you are denying this call…"></textarea>
+    <div class="modal-actions">
+      <button type="button" class="modal-btn modal-btn-secondary" id="tool-perm-deny" title="Deny (Esc)">Deny</button>
+      <button type="button" class="modal-btn modal-btn-primary" id="tool-perm-allow" title="Allow (Ctrl+Enter)">Allow</button>
+    </div>
+  </div>
+</div>
+
+</div>
+<script src="assets/marked/marked.min.js"></script>
+<script src="assets/dompurify/purify.min.js"></script>
+<script src="assets/highlight/highlight.min.js"></script>
+<script>
+// ─── STORAGE BRIDGE ─────────────────────────
+// Python persists state under ~/.mimi-chat/. Paths cross the bridge in tilde
+// form; expand on input boundaries and collapse on display boundaries.
+let HOME_DIR = '';
+const mimiApi = {
+  has() { return !!(window.pywebview && window.pywebview.api); },
+  async loadAll() {
+    if (!this.has()) return null;
+    try { return await window.pywebview.api.load_all(); }
+    catch (e) { console.error('load_all failed', e); return null; }
+  },
+  async saveConfig(p)    { if (this.has()) { try { await window.pywebview.api.save_config(p); } catch (e) { console.error(e); } } },
+  async savePrompts(p)   { if (this.has()) { try { await window.pywebview.api.save_prompts(p); } catch (e) { console.error(e); } } },
+  async saveSampling(p)  { if (this.has()) { try { await window.pywebview.api.save_sampling(p); } catch (e) { console.error(e); } } },
+  async saveTools(p)     { if (this.has()) { try { await window.pywebview.api.save_tools(p); } catch (e) { console.error(e); } } },
+  async saveIgnore(p)    { if (this.has()) { try { await window.pywebview.api.save_ignore(p); } catch (e) { console.error(e); } } },
+  async addRecentDir(p) {
+    if (!this.has()) return RECENT_DIRS;
+    try { return (await window.pywebview.api.add_recent_dir(p)) || RECENT_DIRS; }
+    catch (e) { console.error(e); return RECENT_DIRS; }
+  },
+  async pickFolder(initial) {
+    if (!this.has()) return '';
+    try { return (await window.pywebview.api.pick_folder(initial || '')) || ''; }
+    catch (e) { console.error(e); return ''; }
+  },
+  async saveTextFile(defaultFilename, content, initialDir) {
+    if (!this.has()) return { ok: false, path: '', cancelled: false, error: 'No backend bridge available.' };
+    try {
+      return (await window.pywebview.api.save_text_file(defaultFilename || '', content || '', initialDir || ''))
+        || { ok: false, path: '', cancelled: false, error: 'Empty response from backend.' };
+    } catch (e) {
+      console.error(e);
+      return { ok: false, path: '', cancelled: false, error: String(e) };
+    }
+  },
+  async validateDir(p) {
+    const fallback = (val) => ({ ok: !!String(val || '').trim(), reason: '', display: val || '', absolute: val || '' });
+    if (!this.has()) return fallback(p);
+    try { return (await window.pywebview.api.validate_dir(p)) || fallback(p); }
+    catch (e) { console.error(e); return fallback(p); }
+  },
+  async toolPreview(name, args, projectDir) {
+    if (!this.has()) return { ok: false, error: 'No backend bridge available.' };
+    try { return await window.pywebview.api.tool_preview(name, args || {}, projectDir || ''); }
+    catch (e) { console.error(e); return { ok: false, error: String(e) }; }
+  },
+  async toolCall(name, args, projectDir) {
+    if (!this.has()) return { ok: false, error: 'No backend bridge available.' };
+    try { return await window.pywebview.api.tool_call(name, args || {}, projectDir || ''); }
+    catch (e) { console.error(e); return { ok: false, error: String(e) }; }
+  },
+  async openDevtools() {
+    if (!this.has()) return false;
+    try { return !!(await window.pywebview.api.open_devtools()); }
+    catch (e) { console.error(e); return false; }
+  },
+};
+
+function openDevTools() {
+  mimiApi.openDevtools();
+}
+
+function expandHomeJs(s) {
+  const v = String(s || '');
+  if (!v || !HOME_DIR) return v;
+  if (v === '~') return HOME_DIR;
+  if (v.startsWith('~/') || v.startsWith('~\\')) return HOME_DIR + v.slice(1);
+  return v;
+}
+function collapseHomeJs(s) {
+  const v = String(s || '');
+  if (!v || !HOME_DIR) return v;
+  if (v === HOME_DIR) return '~';
+  if (v.startsWith(HOME_DIR + '/') || v.startsWith(HOME_DIR + '\\')) return '~' + v.slice(HOME_DIR.length);
+  return v;
+}
+
+function _debounce(fn, ms) {
+  let t = 0;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
+
+function snapshotConfigForSave() {
+  const ep = document.getElementById('api-endpoint');
+  const dir = document.getElementById('dir-input');
+  return {
+    provider: st.provider,
+    endpoint: ep ? ep.value : '',
+    model: st.model || '',
+    projectDir: dir ? collapseHomeJs(dir.value) : '',
+    recentDirs: Array.isArray(RECENT_DIRS) ? RECENT_DIRS.slice() : [],
+    thinking: !!st.thinking,
+    autoAcceptEdits: !!st.autoAcceptEdits,
+    promptId: st.promptId || 1,
+    readFileTokenLimit: READ_FILE_TOKEN_LIMIT,
+  };
+}
+function snapshotPromptsForSave() {
+  return {
+    activeId: st.promptId,
+    items: SYSTEM_PROMPTS.map(p => ({ id: p.id, name: p.name, text: p.text })),
+  };
+}
+function snapshotSamplingForSave() {
+  return {
+    temperature: st.temperature, topP: st.topP, topK: st.topK,
+    minP: st.minP, repeatPenalty: st.repeatPenalty,
+  };
+}
+function snapshotToolsForSave() {
+  const out = {};
+  for (const t of builtinTools) out[t.id] = t.perm;
+  return out;
+}
+function snapshotIgnoreForSave() {
+  return {
+    honorGitignore: !!IGNORE_STATE.honorGitignore,
+    patterns: (IGNORE_STATE.patterns || []).slice(),
+  };
+}
+
+const persistConfigSoon   = _debounce(() => mimiApi.saveConfig(snapshotConfigForSave()), 200);
+const persistPromptsSoon  = _debounce(() => mimiApi.savePrompts(snapshotPromptsForSave()), 200);
+const persistSamplingSoon = _debounce(() => mimiApi.saveSampling(snapshotSamplingForSave()), 200);
+const persistToolsSoon    = _debounce(() => mimiApi.saveTools(snapshotToolsForSave()), 100);
+const persistIgnoreSoon   = _debounce(() => mimiApi.saveIgnore(snapshotIgnoreForSave()), 250);
+
+function applyHydratedState(blob) {
+  if (!blob || typeof blob !== 'object') return;
+  if (typeof blob.home === 'string') HOME_DIR = blob.home;
+
+  const cfg = blob.config || {};
+  if (cfg.provider) st.provider = cfg.provider;
+  if (typeof cfg.thinking === 'boolean') st.thinking = cfg.thinking;
+  if (typeof cfg.autoAcceptEdits === 'boolean') st.autoAcceptEdits = cfg.autoAcceptEdits;
+  if (cfg.model) st.model = cfg.model;
+  if (Array.isArray(cfg.recentDirs)) RECENT_DIRS = cfg.recentDirs.slice();
+  if (Number.isFinite(cfg.readFileTokenLimit) && cfg.readFileTokenLimit > 0) {
+    READ_FILE_TOKEN_LIMIT = cfg.readFileTokenLimit;
+  }
+
+  document.querySelectorAll('.prov-card').forEach(c => {
+    c.classList.toggle('sel', c.dataset.prov === st.provider);
+  });
+  const ep = document.getElementById('api-endpoint');
+  if (ep) ep.value = (cfg.endpoint && String(cfg.endpoint).trim()) || ENDPOINTS[st.provider] || '';
+  const dir = document.getElementById('dir-input');
+  if (dir) dir.value = cfg.projectDir || '';
+  st.projectDir = cfg.projectDir || '';
+  updateChatCwdBadge();
+
+  const tBtn = document.getElementById('think-badge');
+  if (tBtn) {
+    tBtn.classList.toggle('on', st.thinking);
+    tBtn.textContent = '◈ thinking';
+  }
+
+  const prompts = blob.prompts;
+  if (prompts && Array.isArray(prompts.items) && prompts.items.length) {
+    SYSTEM_PROMPTS.splice(0, SYSTEM_PROMPTS.length, ...prompts.items.map(p => ({
+      id: Number(p.id), name: String(p.name || ''), text: String(p.text || ''),
+    })));
+    const aid = Number(prompts.activeId);
+    if (Number.isFinite(aid) && SYSTEM_PROMPTS.some(p => p.id === aid)) st.promptId = aid;
+  }
+  if (Number.isFinite(cfg.promptId) && SYSTEM_PROMPTS.some(p => p.id === cfg.promptId)) {
+    st.promptId = cfg.promptId;
+  }
+  const ap = getActivePrompt();
+  st.systemPromptName = ap.name;
+  st.systemPromptText = ap.text;
+
+  const samp = blob.sampling || {};
+  if (Number.isFinite(samp.temperature)) st.temperature = samp.temperature;
+  if (Number.isFinite(samp.topP))        st.topP = samp.topP;
+  if (Number.isFinite(samp.topK))        st.topK = samp.topK;
+  if (Number.isFinite(samp.minP))        st.minP = samp.minP;
+  if (Number.isFinite(samp.repeatPenalty)) st.repeatPenalty = samp.repeatPenalty;
+
+  const tperms = blob.tools || {};
+  for (const t of builtinTools) {
+    const v = tperms[t.id];
+    if (typeof v === 'string') t.perm = v;
+  }
+
+  const ig = blob.ignore || {};
+  IGNORE_STATE.honorGitignore = (typeof ig.honorGitignore === 'boolean') ? ig.honorGitignore : true;
+  IGNORE_STATE.patterns = Array.isArray(ig.patterns)
+    ? ig.patterns.filter(s => typeof s === 'string')
+    : [];
+  IGNORE_DEFAULTS = Array.isArray(ig.defaults) ? ig.defaults.slice() : [];
+}
+
+// ─── DATA ───────────────────────────────────
+const ENDPOINTS = {
+  openai:  'https://api.openai.com/v1',
+  ollama:  'http://localhost:11434/v1',
+  lmstudio:'http://localhost:1234/v1',
+};
+let RECENT_DIRS = [];
+const IGNORE_STATE = { honorGitignore: true, patterns: [] };
+let IGNORE_DEFAULTS = [];
+const READ_FILE_TOKEN_LIMIT_DEFAULT = 10000;
+let READ_FILE_TOKEN_LIMIT = READ_FILE_TOKEN_LIMIT_DEFAULT;
+const SLASH_CMDS = [
+  {cmd:'/clear', desc:'Clear conversation context'},
+  {cmd:'/think', desc:'Toggle extended thinking on / off'},
+  {cmd:'/autoedit', desc:'Toggle auto-accept for all tool calls'},
+  {cmd:'/model', desc:'Open model picker'},
+  {cmd:'/system', desc:'Open system prompt picker'},
+  {cmd:'/save',  desc:'Export conversation to file'},
+];
+
+/** Tools whose preview() and execute() return identical data — call once. */
+const READ_ONLY_TOOLS = new Set(['fuzzy_find_filename', 'fuzzy_find_contents', 'list_directory', 'read_file']);
+
+/** Mirror of storage.py DEFAULT_TOOLS — read-only = allow, mutating = ask. */
+const DEFAULT_TOOL_PERMS = Object.freeze({
+  fuzzy_find_filename: 'allow',
+  fuzzy_find_contents: 'allow',
+  list_directory:      'allow',
+  read_file:           'allow',
+  edit_file:           'ask',
+  apply_patch:         'ask',
+  append_file:         'ask',
+  mkdir:               'ask',
+  rm:                  'ask',
+});
+
+let builtinTools = [
+  {id:'fuzzy_find_filename', name:'fuzzy_find_filename', perm:'allow',
+   desc:'Find files in the project by fuzzy basename match. Args: { query: string, limit?: number }.'},
+  {id:'fuzzy_find_contents', name:'fuzzy_find_contents', perm:'allow',
+   desc:'Find files in the project containing a substring. Args: { query: string, limit?: number }.'},
+  {id:'list_directory',      name:'list_directory',      perm:'allow',
+   desc:'List entries in a project directory. Args: { path?: string, depth?: integer }. depth=0 returns only direct children; depth=N descends N subdirectory levels.'},
+  {id:'read_file',           name:'read_file',           perm:'allow',
+   desc:'Read a project file. By default returns the whole file; if it would exceed the configured token cap, the call is refused with the file\'s total line count — re-issue with `offset` (1-based line) and `limit` (line count) to read a slice. Args: { path: string, offset?: integer, limit?: integer }.'},
+  {id:'edit_file',           name:'edit_file',           perm:'ask',
+   desc:'Edit a project file with a literal search/replace pair. The search snippet must occur exactly once. Args: { path: string, search: string, replace: string }.'},
+  {id:'apply_patch',         name:'apply_patch',         perm:'ask',
+   desc:'Edit a project file by applying a unified-diff patch. Use @@ hunk headers; line numbers are treated as hints. Args: { path: string, patch: string }. Prefer this tool if you naturally produce diffs; otherwise use edit_file.'},
+  {id:'append_file',         name:'append_file',         perm:'ask',
+   desc:'Append text to a project file (creates it if missing). Args: { path: string, content: string }.'},
+  {id:'mkdir',               name:'mkdir',               perm:'ask',
+   desc:'Create a directory in the project. Args: { path: string, recursive?: boolean }.'},
+  {id:'rm',                  name:'rm',                  perm:'ask',
+   desc:'Remove one or more files/directories from the project. Args: { paths: string[], recursive?: boolean }. Pass several paths in a single call to delete them together; the `recursive` flag applies to every path.'},
+];
+
+/** Runtime catalog (session only; reload resets to defaults). */
+// Pre-load placeholder. The real default text comes from storage.load_prompts()
+// (seeded from src/prompts/) and is spliced in by applyLoadedConfig.
+let SYSTEM_PROMPTS = [
+  {id:1, name:'Default', text:''},
+];
+
+function getActivePrompt() {
+  const p = SYSTEM_PROMPTS.find(x => x.id === st.promptId);
+  return p || SYSTEM_PROMPTS[0];
+}
+
+/** Defaults for OpenAI-compatible chat sampling (LM Studio, Ollama /v1, etc.). */
+const DEFAULT_SAMPLING = Object.freeze({
+  temperature: 0.7,
+  topP: 0.9,
+  topK: 40,
+  minP: 0.05,
+  repeatPenalty: 1.0,
+});
+
+let st = {
+  provider:'ollama', model:'', projectDir:'', thinking:true, autoAcceptEdits:false,
+  prevScreen:'setup', slashIdx:0, pickerIdx:0, pickerOpen:false,
+  promptId: 1,
+  selectedPromptId: null,
+  promptPickerIdx:0,
+  promptPickerOpen:false,
+  systemPromptName: SYSTEM_PROMPTS[0].name,
+  systemPromptText: SYSTEM_PROMPTS[0].text,
+  temperature: DEFAULT_SAMPLING.temperature,
+  topP: DEFAULT_SAMPLING.topP,
+  topK: DEFAULT_SAMPLING.topK,
+  minP: DEFAULT_SAMPLING.minP,
+  repeatPenalty: DEFAULT_SAMPLING.repeatPenalty,
+  /** @type {{ id: string, meta: string, contextTokens?: number }[]} */
+  availableModels: [],
+  modelsFetchError: '',
+  modelsLoading: false,
+  /** OpenAI-shaped messages (user / assistant / tool only; system injected per request). */
+  conversationMessages: [],
+  /**
+   * When the backend returns `usage` on chat completions, we anchor the badge to that and
+   * only heuristically extend for new messages since the last snapshot (see estimateMessagesPayloadTokens).
+   * @type {null | { nextPromptApprox: number, baselineMsgCount: number, systemPromptSnap: string }}
+   */
+  tokenMeter: null,
+  /** @type {AbortController|null} */
+  chatAbortController: null,
+  chatInFlight: false,
+  /** When true, new assistant/tool content auto-scrolls the transcript to the bottom. */
+  chatStickToBottom: true,
+};
+
+let _modelRefreshTimer = 0;
+
+// ─── SETUP ─────────────────────────────────
+function initSetup() {
+  const epEl = document.getElementById('api-endpoint');
+  if (!epEl.value) epEl.value = ENDPOINTS[st.provider] || '';
+  if (!epEl.dataset.mimiModelsBound) {
+    epEl.dataset.mimiModelsBound = '1';
+    epEl.addEventListener('input', () => {
+      clearTimeout(_modelRefreshTimer);
+      _modelRefreshTimer = setTimeout(() => refreshModelsFromApi(), 450);
+      persistConfigSoon();
+    });
+    epEl.addEventListener('change', () => {
+      clearTimeout(_modelRefreshTimer);
+      refreshModelsFromApi();
+      persistConfigSoon();
+    });
+  }
+  const dirEl = document.getElementById('dir-input');
+  if (dirEl && !dirEl.dataset.mimiDirBound) {
+    dirEl.dataset.mimiDirBound = '1';
+    dirEl.addEventListener('input', () => {
+      clearDirError();
+      persistConfigSoon();
+    });
+    dirEl.addEventListener('change', () => {
+      const v = dirEl.value;
+      if (v) dirEl.value = collapseHomeJs(v);
+      persistConfigSoon();
+    });
+  }
+  refreshModelsFromApi();
+  populatePromptSelect();
+  populateRecent();
+  const ap = getActivePrompt();
+  st.promptId = ap.id;
+  st.systemPromptName = ap.name;
+  st.systemPromptText = ap.text;
+  const badge = document.getElementById('prompt-badge-txt');
+  if (badge) badge.textContent = ap.name;
+
+  if (!window._mimiSetupHotkeysBound) {
+    window._mimiSetupHotkeysBound = true;
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+      const setup = document.getElementById('screen-setup');
+      if (!setup || !setup.classList.contains('active')) return;
+      e.preventDefault();
+      startChat();
+    });
+  }
+}
+
+function selectProvider(el) {
+  document.querySelectorAll('.prov-card').forEach(c => c.classList.remove('sel'));
+  el.classList.add('sel');
+  st.provider = el.dataset.prov;
+  const ep = document.getElementById('api-endpoint');
+  if (!ep.value || Object.values(ENDPOINTS).includes(ep.value))
+    ep.value = ENDPOINTS[st.provider];
+  clearModelSearchFields();
+  refreshModelsFromApi();
+  persistConfigSoon();
+}
+
+/** OpenAI-compatible base URL ending in /v1 */
+function normalizeOpenAIV1Base(input) {
+  let u = String(input || '').trim();
+  if (!u) return '';
+  u = u.replace(/\/+$/, '');
+  u = u.replace(/\/v1\/chat\/completions$/i, '/v1');
+  u = u.replace(/\/chat\/completions$/i, '');
+  if (/\/v1$/i.test(u)) return u;
+  return u + '/v1';
+}
+
+async function fetchOpenAICompatModelList(v1Base) {
+  const base = normalizeOpenAIV1Base(v1Base);
+  if (!base) throw new Error('Missing API base URL');
+  const url = base + '/models';
+  const res = await fetch(url, { method: 'GET', headers: { Accept: 'application/json' } });
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText || ''}`.trim());
+  const body = await res.json();
+  const data = body && body.data;
+  if (!Array.isArray(data)) throw new Error('Unexpected /models response (no data array)');
+  const rows = data
+    .map((m) => {
+      const id = m && (m.id || m.model);
+      if (!id || typeof id !== 'string') return null;
+      const meta =
+        (m.owned_by && String(m.owned_by)) ||
+        (m.object && m.object !== 'model' ? String(m.object) : '') ||
+        'local';
+      const contextTokens = extractContextTokensFromOpenAIModelRow(m);
+      const row = { id, meta };
+      if (contextTokens != null) row.contextTokens = contextTokens;
+      return row;
+    })
+    .filter(Boolean);
+  rows.sort((a, b) => a.id.localeCompare(b.id));
+  return rows;
+}
+
+/** Normalize advertised context sizes from APIs (reject tiny garbage values). */
+function normalizeContextTokens(v) {
+  const n = typeof v === 'number' && Number.isFinite(v) ? Math.floor(v) : parseInt(String(v ?? ''), 10);
+  if (!Number.isFinite(n) || n < 256) return null;
+  return n;
+}
+
+/**
+ * Read context token limits from a `model_info`-shaped object.
+ *
+ * Ollama (/api/show and some list payloads) puts GGUF metadata in a **flat** object whose
+ * keys are dotted paths. The trained context window is keyed as **`<architecture>.context_length`**
+ * where `<architecture>` matches the model family in GGUF (`llama`, `gemma3`, `qwen2`, `phi3`, …),
+ * e.g. `llama.context_length`, `gemma3.context_length`. There is typically no plain
+ * `model_info.context_length` — you must match those suffixed keys (or take the numeric max if
+ * several appear).
+ *
+ * LM Studio and others may use plain nested fields instead (`context_length` at top level).
+ */
+function extractContextFromModelInfoObject(mi) {
+  if (!mi || typeof mi !== 'object') return null;
+  const candidates = [];
+  const push = (v) => {
+    const n = normalizeContextTokens(v);
+    if (n != null) candidates.push(n);
+  };
+  push(mi.context_length);
+  push(mi.contextLength);
+  push(mi.max_tokens);
+  for (const k of Object.keys(mi)) {
+    if (/\.context_length$/i.test(k) || /\.contextLength$/i.test(k)) push(mi[k]);
+  }
+  if (!candidates.length) return null;
+  return Math.max(...candidates);
+}
+
+function parseOllamaNumCtxFromParametersBlock(s) {
+  if (!s || typeof s !== 'string') return null;
+  const text = s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const re = /(?:^|\n)\s*num_ctx\s+(\d+)/g;
+  let m;
+  let best = null;
+  while ((m = re.exec(text)) !== null) {
+    const n = normalizeContextTokens(m[1]);
+    if (n != null) best = n;
+  }
+  return best;
+}
+
+function parseOllamaNumCtxFromModelfile(s) {
+  if (!s || typeof s !== 'string') return null;
+  const text = s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const m = text.match(/PARAMETER\s+num_ctx\s+(\d+)/i);
+  return m ? normalizeContextTokens(m[1]) : null;
+}
+
+function ollamaRootFromOpenAIV1Base(v1Base) {
+  const b = String(v1Base || '').trim().replace(/\/+$/, '');
+  if (!b) return '';
+  return b.replace(/\/v1$/i, '');
+}
+
+/** Effective context for Ollama: configured num_ctx capped by architecture when both exist. */
+function effectiveOllamaContextFromShowBody(body) {
+  if (!body || typeof body !== 'object') return null;
+  const arch = extractContextFromModelInfoObject(body.model_info);
+  const numCtx =
+    parseOllamaNumCtxFromParametersBlock(body.parameters) ||
+    parseOllamaNumCtxFromModelfile(body.modelfile);
+  if (numCtx != null && arch != null) return Math.min(numCtx, arch);
+  if (numCtx != null) return numCtx;
+  if (arch != null) return arch;
+  return null;
+}
+
+async function fetchOllamaEffectiveContext(ollamaRoot, modelName) {
+  const root = String(ollamaRoot || '').replace(/\/+$/, '');
+  if (!root || !modelName) return null;
+  const url = root + '/api/show';
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ model: modelName }),
+  });
+  if (!res.ok) return null;
+  const body = await res.json();
+  return effectiveOllamaContextFromShowBody(body);
+}
+
+async function enrichOllamaContextsViaApiShow(ollamaRoot, rows) {
+  if (!ollamaRoot || !Array.isArray(rows) || !rows.length) return;
+  const pool = 6;
+  for (let i = 0; i < rows.length; i += pool) {
+    const chunk = rows.slice(i, i + pool);
+    await Promise.all(
+      chunk.map(async (r) => {
+        try {
+          const n = await fetchOllamaEffectiveContext(ollamaRoot, r.id);
+          if (n != null) r.contextTokens = n;
+        } catch (_) {
+          /* keep list row as-is */
+        }
+      })
+    );
+  }
+}
+
+/**
+ * LM Studio exposes real limits on native `GET /api/v1/models`, not on OpenAI `GET /v1/models`.
+ * Prefer each loaded instance's `config.context_length`; otherwise `max_context_length`.
+ * @see https://lmstudio.ai/docs/developer/rest/list
+ */
+function collectLmStudioNativeModelIdKeys(m, intoSet) {
+  if (typeof m.key === 'string') intoSet.add(m.key);
+  if (typeof m.selected_variant === 'string') intoSet.add(m.selected_variant);
+  if (Array.isArray(m.variants)) {
+    for (const v of m.variants) {
+      if (typeof v === 'string') intoSet.add(v);
+    }
+  }
+  if (Array.isArray(m.loaded_instances)) {
+    for (const inst of m.loaded_instances) {
+      if (inst && typeof inst.id === 'string') intoSet.add(inst.id);
+    }
+  }
+}
+
+function buildLmStudioContextTokenMapFromNativeModels(body) {
+  const map = new Map();
+  const models = body && Array.isArray(body.models) ? body.models : [];
+  for (const m of models) {
+    if (!m || typeof m !== 'object') continue;
+    const max = normalizeContextTokens(m.max_context_length);
+    const insts = Array.isArray(m.loaded_instances) ? m.loaded_instances : [];
+
+    for (const inst of insts) {
+      const c = normalizeContextTokens(inst && inst.config && inst.config.context_length);
+      const ctx = c != null ? c : max;
+      if (ctx != null && inst && typeof inst.id === 'string') map.set(inst.id, ctx);
+    }
+
+    let fallback = max;
+    for (const inst of insts) {
+      const c = normalizeContextTokens(inst && inst.config && inst.config.context_length);
+      if (c != null) {
+        fallback = c;
+        break;
+      }
+    }
+
+    const keys = new Set();
+    collectLmStudioNativeModelIdKeys(m, keys);
+    for (const k of keys) {
+      if (!map.has(k) && fallback != null) map.set(k, fallback);
+    }
+  }
+  return map;
+}
+
+function applyLmStudioContextMapToRows(rows, ctxMap) {
+  if (!ctxMap || !ctxMap.size) return;
+  for (const r of rows) {
+    const v = ctxMap.get(r.id);
+    if (v != null) r.contextTokens = v;
+  }
+}
+
+async function enrichLMStudioContextsViaNativeModels(httpRoot, rows) {
+  const root = String(httpRoot || '').replace(/\/+$/, '');
+  if (!root || !Array.isArray(rows) || !rows.length) return;
+  let res;
+  try {
+    res = await fetch(root + '/api/v1/models', { method: 'GET', headers: { Accept: 'application/json' } });
+  } catch (_) {
+    return;
+  }
+  if (!res.ok) return;
+  let body;
+  try {
+    body = await res.json();
+  } catch (_) {
+    return;
+  }
+  const map = buildLmStudioContextTokenMapFromNativeModels(body);
+  applyLmStudioContextMapToRows(rows, map);
+}
+
+async function enrichModelContextsFromProviderApis(v1Input, rows) {
+  if (!Array.isArray(rows) || !rows.length) return;
+  const base = normalizeOpenAIV1Base(v1Input);
+  const httpRoot = ollamaRootFromOpenAIV1Base(base);
+  const hostLooksOllama = /\b:11434\b/.test(base);
+  if ((st.provider === 'ollama' || hostLooksOllama) && httpRoot) {
+    await enrichOllamaContextsViaApiShow(httpRoot, rows);
+  }
+  const hostLooksLmStudio = /\b:1234\b/.test(base);
+  if ((st.provider === 'lmstudio' || hostLooksLmStudio) && httpRoot) {
+    await enrichLMStudioContextsViaNativeModels(httpRoot, rows);
+  }
+}
+
+/** LM Studio / OpenRouter / Ollama list: various shapes for context on each model row. */
+function extractContextTokensFromOpenAIModelRow(m) {
+  if (!m || typeof m !== 'object') return null;
+  const t = (v) => normalizeContextTokens(v);
+  const top = m.top_provider && typeof m.top_provider === 'object' ? m.top_provider : null;
+  const from =
+    t(m.context_length) ||
+    t(m.contextLength) ||
+    t(m.max_model_len) ||
+    t(m.context_window) ||
+    t(m.max_context) ||
+    (m.model_info && extractContextFromModelInfoObject(m.model_info)) ||
+    (m.metadata && (t(m.metadata.context_length) || t(m.metadata.max_context))) ||
+    (top && (t(top.context_length) || t(top.max_tokens))) ||
+    null;
+  return from;
+}
+
+function _modelSearchQuery(elId) {
+  const el = document.getElementById(elId);
+  return el ? String(el.value || '').trim().toLowerCase() : '';
+}
+
+function filterModelsByQuery(models, q) {
+  if (!q) return models.slice();
+  return models.filter(
+    (m) =>
+      m.id.toLowerCase().includes(q) || String(m.meta || '').toLowerCase().includes(q)
+  );
+}
+
+function getFilteredModelsForSetup() {
+  return filterModelsByQuery(st.availableModels, _modelSearchQuery('model-search-setup'));
+}
+
+function getFilteredModelsForPicker() {
+  return filterModelsByQuery(st.availableModels, _modelSearchQuery('model-search-picker'));
+}
+
+function onModelSearchSetupInput() {
+  paintModelList();
+}
+
+function onModelSearchPickerInput() {
+  st.pickerIdx = 0;
+  renderPickerList();
+}
+
+function clearModelSearchFields() {
+  const a = document.getElementById('model-search-setup');
+  const b = document.getElementById('model-search-picker');
+  if (a) a.value = '';
+  if (b) b.value = '';
+}
+
+function handleModelPickerSearchKey(e) {
+  if (!st.pickerOpen) return;
+  const items = document.querySelectorAll('#picker-list .picker-item');
+  if (!items.length) return;
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    st.pickerIdx = (st.pickerIdx + 1) % items.length;
+    highlightPicker();
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    st.pickerIdx = (st.pickerIdx - 1 + items.length) % items.length;
+    highlightPicker();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    const item = items[st.pickerIdx];
+    if (item) selectPickerModel(item.dataset.model);
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    closeModelPicker();
+  }
+}
+
+function setModelsRefreshBusy(busy) {
+  st.modelsLoading = !!busy;
+  document.querySelectorAll('.refresh-models-btn').forEach((btn) => {
+    btn.disabled = !!busy;
+  });
+}
+
+function refreshModelsFromPicker(ev) {
+  if (ev) {
+    ev.preventDefault();
+    ev.stopPropagation();
+  }
+  refreshModelsFromApi();
+}
+
+function paintModelList() {
+  const all = st.availableModels;
+  const err = st.modelsFetchError;
+  const errRow = err
+    ? `<div class="model-fetch-msg model-fetch-msg-err" title="${esc(err)}">${esc(err)}</div>`
+    : '';
+  if (!all.length) {
+    document.getElementById('model-list').innerHTML =
+      errRow +
+      `<div class="model-fetch-msg">No models loaded. Set the API endpoint, start the local server, then click <strong>Refresh</strong>.</div>`;
+    return;
+  }
+  const rows = getFilteredModelsForSetup();
+  if (!rows.length) {
+    document.getElementById('model-list').innerHTML =
+      errRow +
+      `<div class="model-fetch-msg">No models match your search. Clear the search box to see all ${all.length} model(s).</div>`;
+    return;
+  }
+  const idx = rows.findIndex((r) => r.id === st.model);
+  document.getElementById('model-list').innerHTML =
+    errRow +
+    rows
+      .map(
+        (m, i) => `
+    <div class="model-row${i === idx ? ' sel' : ''}" onclick="pickSetupModel(this,'${esc(m.id)}')">
+      <div class="mradio"><div class="mrdot"></div></div>
+      <div class="mname">${esc(m.id)}</div>
+      <div class="mmeta">${esc(m.meta)}</div>
+    </div>`
+      )
+      .join('');
+}
+
+async function refreshModelsFromApi() {
+  st.modelsFetchError = '';
+  setModelsRefreshBusy(true);
+  const v1Input = document.getElementById('api-endpoint').value.trim() || ENDPOINTS[st.provider];
+  const box = document.getElementById('model-list');
+  box.innerHTML =
+    '<div class="model-fetch-msg model-fetch-msg-loading">Loading models from <span class="model-fetch-url">' +
+    esc(normalizeOpenAIV1Base(v1Input) + '/models') +
+    '</span>…</div>';
+  try {
+    st.availableModels = await fetchOpenAICompatModelList(v1Input);
+    if (!st.availableModels.length) {
+      st.availableModels = [];
+      st.modelsFetchError = 'Server returned an empty model list';
+    } else {
+      await enrichModelContextsFromProviderApis(v1Input, st.availableModels);
+    }
+  } catch (e) {
+    st.availableModels = [];
+    let msg = e && e.message ? e.message : String(e);
+    if (/cors|access-control|blocked by cors/i.test(msg)) {
+      msg +=
+        ' For the packaged Qt app (mimi-chat), restart after updating so local /v1 calls work. If you opened this page from another dev server, enable CORS on the LLM server or use a dev proxy.';
+    }
+    st.modelsFetchError = msg;
+  } finally {
+    setModelsRefreshBusy(false);
+  }
+  paintModelList();
+  if (st.pickerOpen) renderPickerList();
+  updateContextBadge();
+}
+
+function pickSetupModel(el, name) {
+  document.querySelectorAll('#model-list .model-row').forEach(r => r.classList.remove('sel'));
+  el.classList.add('sel');
+  st.model = name;
+  invalidateTokenMeter();
+  updateContextBadge();
+  persistConfigSoon();
+}
+
+function populatePromptSelect() {
+  const scroll = document.getElementById('prompt-dd-scroll');
+  const btnTxt = document.getElementById('prompt-dd-btn-txt');
+  if (!scroll || !btnTxt) return;
+
+  const active = getActivePrompt();
+  btnTxt.textContent = active ? active.name : 'System Prompt';
+
+  scroll.innerHTML = '';
+  SYSTEM_PROMPTS.forEach(p => {
+    const div = document.createElement('div');
+    div.className = 'dd-item' + (p.id === st.promptId ? ' dd-item-active' : '');
+    div.textContent = p.name;
+    div.onclick = (e) => {
+      e.stopPropagation();
+      selectSetupPrompt(String(p.id));
+      closePromptDD();
+    };
+    scroll.appendChild(div);
+  });
+}
+
+function togglePromptDD(e) { e.stopPropagation(); document.getElementById('prompt-dd').classList.toggle('open'); }
+function closePromptDD() { const dd = document.getElementById('prompt-dd'); if (dd) dd.classList.remove('open'); }
+
+function populateRecent() {
+  const scroll = document.getElementById('recent-dd-scroll');
+  if (!scroll) return;
+  scroll.innerHTML = '';
+  if (!RECENT_DIRS.length) {
+    const empty = document.createElement('div');
+    empty.className = 'dd-item';
+    empty.style.opacity = '0.6';
+    empty.style.cursor = 'default';
+    empty.textContent = 'No recent directories yet.';
+    scroll.appendChild(empty);
+    return;
+  }
+  RECENT_DIRS.forEach(d => {
+    const div = document.createElement('div');
+    div.className = 'dd-item';
+    div.textContent = d;
+    div.onclick = () => {
+      document.getElementById('dir-input').value = d;
+      closeRecent();
+      clearDirError();
+      persistConfigSoon();
+    };
+    scroll.appendChild(div);
+  });
+}
+
+function toggleRecent(e) { e.stopPropagation(); document.getElementById('recent-dd').classList.toggle('open'); }
+function closeRecent() { document.getElementById('recent-dd').classList.remove('open'); }
+
+async function browseDir() {
+  closeRecent();
+  const dirEl = document.getElementById('dir-input');
+  const initial = expandHomeJs(dirEl ? dirEl.value : '');
+  const picked = await mimiApi.pickFolder(initial);
+  if (!picked) return;
+  if (dirEl) dirEl.value = picked;
+  clearDirError();
+  const updated = await mimiApi.addRecentDir(picked);
+  if (Array.isArray(updated)) {
+    RECENT_DIRS = updated.slice();
+    populateRecent();
+  }
+  persistConfigSoon();
+}
+
+function updateChatCwdBadge() {
+  const path = document.getElementById('chat-cwd-path');
+  const btn = document.getElementById('chat-cwd-btn');
+  const v = st.projectDir || '';
+  if (path) path.textContent = v || '—';
+  if (btn) btn.title = v ? `Project directory: ${v} · click to change` : 'Choose project directory';
+}
+
+function applyProjectDir(tildePath) {
+  const v = String(tildePath || '');
+  st.projectDir = v;
+  const dirEl = document.getElementById('dir-input');
+  if (dirEl) dirEl.value = v;
+  updateChatCwdBadge();
+}
+
+async function changeProjectDirFromChat() {
+  const initial = expandHomeJs(st.projectDir || '');
+  const picked = await mimiApi.pickFolder(initial);
+  if (!picked) return;
+  const v = await mimiApi.validateDir(picked);
+  if (!v || !v.ok) return;
+  applyProjectDir(v.display || picked);
+  const updated = await mimiApi.addRecentDir(v.display || picked);
+  if (Array.isArray(updated)) {
+    RECENT_DIRS = updated.slice();
+    populateRecent();
+  }
+  persistConfigSoon();
+  const chatScreen = document.getElementById('screen-chat');
+  if (chatScreen && chatScreen.classList.contains('active')) {
+    const area = document.getElementById('messages-area');
+    if (area) {
+      const div = document.createElement('div');
+      div.className = 'sys-msg';
+      div.textContent = `— project dir: ${st.projectDir} —`;
+      area.appendChild(div);
+      scrollMessagesAreaToBottom(false);
+    }
+  }
+}
+
+function setDirError(msg) {
+  const inp = document.getElementById('dir-input');
+  const err = document.getElementById('dir-err');
+  if (inp) {
+    inp.classList.add('f-input-err');
+    inp.setAttribute('aria-invalid', 'true');
+  }
+  if (err) {
+    err.textContent = msg || 'Project directory is required.';
+    err.hidden = false;
+  }
+}
+
+function clearDirError() {
+  const inp = document.getElementById('dir-input');
+  const err = document.getElementById('dir-err');
+  if (inp) {
+    inp.classList.remove('f-input-err');
+    inp.removeAttribute('aria-invalid');
+  }
+  if (err) {
+    err.textContent = '';
+    err.hidden = true;
+  }
+}
+
+function resetChatMessages() {
+  st.conversationMessages = [];
+  invalidateTokenMeter();
+  document.getElementById('messages-area').innerHTML =
+    '<div class="sys-msg">— session started · /clear resets context —</div>';
+  st.chatStickToBottom = true;
+  updateContextBadge();
+}
+
+async function startChat() {
+  if (!st.availableModels.length) {
+    alert('Load models first: set the API endpoint, start your local server, then click Refresh.');
+    return;
+  }
+  if (!st.model || !st.availableModels.some((m) => m.id === st.model)) {
+    st.model = st.availableModels[0].id;
+  }
+  const dirEl = document.getElementById('dir-input');
+  const dirRaw = dirEl ? String(dirEl.value || '').trim() : '';
+  if (!dirRaw) {
+    setDirError('Project directory is required.');
+    if (dirEl) dirEl.focus();
+    return;
+  }
+  const v = await mimiApi.validateDir(dirRaw);
+  if (!v || !v.ok) {
+    setDirError((v && v.reason) || 'Project directory is invalid.');
+    if (dirEl) dirEl.focus();
+    return;
+  }
+  applyProjectDir(v.display || dirRaw);
+  clearDirError();
+  const updated = await mimiApi.addRecentDir(v.display || dirRaw);
+  if (Array.isArray(updated)) {
+    RECENT_DIRS = updated.slice();
+    populateRecent();
+  }
+  persistConfigSoon();
+
+  closeSlash();
+  closeModelPicker();
+  closePromptPicker();
+  closePromptDD();
+  closeRecent();
+  resetChatMessages();
+  document.getElementById('model-badge-txt').textContent = st.model;
+  const ap = getActivePrompt();
+  st.promptId = ap.id;
+  st.systemPromptName = ap.name;
+  st.systemPromptText = ap.text;
+  const badge = document.getElementById('prompt-badge-txt');
+  if (badge) badge.textContent = ap.name;
+  showScreen('chat');
+  syncAutoAcceptBadge();
+  updateContextBadge();
+}
+
+// ─── NAVIGATION ────────────────────────────
+function showScreen(name) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById('screen-'+name).classList.add('active');
+  if (name === 'settings') renderSettings();
+  if (name === 'chat') {
+    syncAutoAcceptBadge();
+    updateContextBadge();
+    updateChatCwdBadge();
+  }
+  updateScrollBtn();
+  if (name === 'chat') {
+    requestAnimationFrame(() => {
+      updateScrollBtn();
+      focusComposerAtEnd();
+    });
+  }
+}
+
+function focusComposerAtEnd() {
+  const ed = getEditor();
+  if (!ed) return;
+  ed.focus({ preventScroll: true });
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  range.selectNodeContents(ed);
+  range.collapse(false);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+function goSettings() {
+  const cur = document.querySelector('.screen.active');
+  st.prevScreen = cur ? cur.id.replace('screen-','') : 'setup';
+  showScreen('settings');
+}
+function goBack() { showScreen(st.prevScreen); }
+
+// ─── CHAT INPUT ────────────────────────────
+function handleKey(e) {
+  // IME composition produces synthetic key events that do not reflect actual
+  // user intent (e.g. an Enter that just commits the composition). Defer to
+  // the IME and let `compositionend` resync our state.
+  if (e.isComposing || _composingActive) return;
+
+  // Undo / redo. Bind explicitly because every input event runs DOM-mutating
+  // normalization, which kills the browser's built-in contenteditable history.
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'z' || e.key === 'Z')) {
+    e.preventDefault();
+    if (e.shiftKey) performRedo();
+    else performUndo();
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 'y' || e.key === 'Y')) {
+    e.preventDefault();
+    performRedo();
+    return;
+  }
+
+  const slashOpen = document.getElementById('slash-popup').classList.contains('open');
+
+  if (st.pickerOpen) {
+    const items = document.querySelectorAll('#picker-list .picker-item');
+    if (e.key==='ArrowDown'){ e.preventDefault(); st.pickerIdx=(st.pickerIdx+1)%items.length; highlightPicker(); return; }
+    if (e.key==='ArrowUp')  { e.preventDefault(); st.pickerIdx=(st.pickerIdx-1+items.length)%items.length; highlightPicker(); return; }
+    if (e.key==='Escape')   { closeSlash(); closeModelPicker(); clearEditor(); return; }
+    if (e.key==='Enter' && !e.shiftKey) {
+      e.preventDefault();
+      const item = items[st.pickerIdx];
+      if (item) selectPickerModel(item.dataset.model);
+      return;
+    }
+  }
+
+  if (st.promptPickerOpen) {
+    const items = document.querySelectorAll('#prompt-picker-list .picker-item');
+    if (e.key==='ArrowDown'){ e.preventDefault(); st.promptPickerIdx=(st.promptPickerIdx+1)%items.length; highlightPromptPicker(); return; }
+    if (e.key==='ArrowUp')  { e.preventDefault(); st.promptPickerIdx=(st.promptPickerIdx-1+items.length)%items.length; highlightPromptPicker(); return; }
+    if (e.key==='Escape')   { closeSlash(); closePromptPicker(); clearEditor(); return; }
+    if (e.key==='Enter' && !e.shiftKey) {
+      e.preventDefault();
+      const item = items[st.promptPickerIdx];
+      if (item && item.dataset.promptId) selectPickerPrompt(parseInt(item.dataset.promptId, 10));
+      return;
+    }
+  }
+
+  if (slashOpen) {
+    const items = document.querySelectorAll('#slash-popup .slash-item');
+    if (e.key==='ArrowDown'){ e.preventDefault(); st.slashIdx=(st.slashIdx+1)%items.length; highlightSlash(); return; }
+    if (e.key==='ArrowUp')  { e.preventDefault(); st.slashIdx=(st.slashIdx-1+items.length)%items.length; highlightSlash(); return; }
+    if (e.key==='Escape')   { closeSlash(); closeModelPicker(); closePromptPicker(); return; }
+    if ((e.key==='Enter' && !e.shiftKey) || e.key==='Tab') {
+      e.preventDefault();
+      const item = items[st.slashIdx];
+      if (item) applySlash(item.dataset.cmd);
+      return;
+    }
+  }
+
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    if (st.chatInFlight) return;
+    sendMessage();
+    return;
+  }
+  if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !e.ctrlKey && !e.altKey && !e.metaKey) {
+    // Chromium arrow-nav skips line <div>s whose only content is a
+    // contenteditable=false element (no text caret stop). After the default
+    // moves the caret, detect a skip and redirect to the skipped line's start.
+    fixArrowSkipPastPillLine(e.key === 'ArrowDown' ? 1 : -1);
+  }
+  if ((e.key === 'Backspace' || e.key === 'Delete') && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+    // Manually merge adjacent line <div>s so Chromium doesn't flatten them
+    // back into the editor (which strands a <br> at the editor root).
+    if (handleLineMerge(e.key === 'Backspace')) {
+      e.preventDefault();
+      return;
+    }
+  }
+  if (e.key === 'Enter' && e.shiftKey) {
+    // Split the current line into two block <div>s. Block boundaries are the
+    // only positions Chromium reliably exposes adjacent to a contenteditable
+    // =false pill — inline approaches (<br>, \n in text node) leave the
+    // pre-pill caret position unreachable.
+    e.preventDefault();
+    insertLineBreakAtCaret();
+    return;
+  }
+}
+
+function normalizeLineDiv(line) {
+  // Within a line <div>, a <br> followed by other content is the
+  // "unreachable caret position" bug pattern (Chromium can't place the caret
+  // between a line-break atom and a contenteditable=false element). Strip
+  // those BRs — the surviving content provides its own line height. A trailing
+  // BR is fine and required: it gives the caret a reachable position after a
+  // pill, and is the empty-line filler when a line has nothing else.
+  if (!line || line.tagName !== 'DIV') return;
+  let i = 0;
+  while (i < line.childNodes.length) {
+    const c = line.childNodes[i];
+    if (c.nodeType === Node.ELEMENT_NODE && c.tagName === 'BR' && i < line.childNodes.length - 1) {
+      line.removeChild(c);
+    } else {
+      i++;
+    }
+  }
+  // Strip zero-length text nodes (left behind by Range.extractContents/split).
+  // A line containing only an empty text node has firstChild != null, which
+  // would bypass the BR-filler insertion below and collapse to zero height
+  // — that's the Shift+Enter-at-end-of-line invisible-newline bug.
+  for (let j = line.childNodes.length - 1; j >= 0; j--) {
+    const c = line.childNodes[j];
+    if (c.nodeType === Node.TEXT_NODE && c.nodeValue === '') {
+      line.removeChild(c);
+    }
+  }
+  if (!line.firstChild) line.appendChild(document.createElement('br'));
+}
+
+function normalizeEditorLines() {
+  const editor = getEditor();
+  if (!editor) return;
+  for (const line of Array.from(editor.children)) {
+    if (line.tagName !== 'DIV') continue;
+    normalizeLineDiv(line);
+  }
+}
+
+function isPillOnlyLine(line) {
+  let hasPill = false;
+  for (const c of line.childNodes) {
+    if (c.nodeType === Node.TEXT_NODE) {
+      if ((c.nodeValue || '').replace(/\u200b/g, '').length > 0) return false;
+    } else if (c.nodeType === Node.ELEMENT_NODE) {
+      if (c.tagName === 'BR') return false;
+      if (c.classList && c.classList.contains('msg-img-pill')) { hasPill = true; continue; }
+      return false;
+    }
+  }
+  return hasPill;
+}
+
+function fixArrowSkipPastPillLine(direction) {
+  const editor = getEditor();
+  const sel = window.getSelection();
+  if (!editor || !sel || !sel.rangeCount) return;
+  const beforeLine = findLineDiv(sel.getRangeAt(0).startContainer, editor);
+  if (!beforeLine) return;
+  setTimeout(() => {
+    const sel2 = window.getSelection();
+    if (!sel2 || !sel2.rangeCount) return;
+    const afterLine = findLineDiv(sel2.getRangeAt(0).startContainer, editor);
+    if (!afterLine || afterLine === beforeLine) return;
+    let n = direction > 0 ? beforeLine.nextSibling : beforeLine.previousSibling;
+    while (n && n !== afterLine) {
+      if (n.nodeType === Node.ELEMENT_NODE && n.tagName === 'DIV' && isPillOnlyLine(n)) {
+        const r = document.createRange();
+        r.setStart(n, 0);
+        r.collapse(true);
+        sel2.removeAllRanges();
+        sel2.addRange(r);
+        return;
+      }
+      n = direction > 0 ? n.nextSibling : n.previousSibling;
+    }
+  }, 0);
+}
+
+function findLineDiv(node, editor) {
+  let n = node;
+  while (n && n !== editor) {
+    if (n.nodeType === Node.ELEMENT_NODE && n.tagName === 'DIV' && n.parentNode === editor) return n;
+    n = n.parentNode;
+  }
+  return null;
+}
+
+function isAtLineStart(line, container, offset) {
+  if (offset !== 0) return false;
+  let n = container;
+  while (n !== line) {
+    const p = n.parentNode;
+    if (!p || p.firstChild !== n) return false;
+    n = p;
+  }
+  return true;
+}
+
+function isAtLineEnd(line, container, offset) {
+  if (container.nodeType === Node.TEXT_NODE) {
+    if (offset !== container.nodeValue.length) return false;
+  } else if (offset !== container.childNodes.length) {
+    return false;
+  }
+  let n = container;
+  while (n !== line) {
+    const p = n.parentNode;
+    if (!p || p.lastChild !== n) return false;
+    n = p;
+  }
+  return true;
+}
+
+function isEmptyLine(line) {
+  for (const c of line.childNodes) {
+    if (c.nodeType === Node.TEXT_NODE) {
+      if (c.nodeValue !== '') return false;
+    } else if (c.nodeType === Node.ELEMENT_NODE) {
+      if (c.tagName !== 'BR') return false;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+function mergeLineDivs(target, source) {
+  const targetEmpty = isEmptyLine(target);
+  const sourceEmpty = isEmptyLine(source);
+  if (targetEmpty) {
+    while (target.firstChild) target.removeChild(target.firstChild);
+  }
+  if (sourceEmpty) {
+    source.remove();
+    if (!target.firstChild) target.appendChild(document.createElement('br'));
+    const r = document.createRange();
+    r.setStart(target, targetEmpty ? 0 : target.childNodes.length);
+    r.collapse(true);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+    return;
+  }
+  const joinOffset = target.childNodes.length;
+  while (source.firstChild) {
+    const c = source.firstChild;
+    source.removeChild(c);
+    // Drop BR fillers — a BR adjacent to other content is the unreachable-
+    // caret bug pattern. Real content provides its own line height.
+    if (c.nodeType === Node.ELEMENT_NODE && c.tagName === 'BR') continue;
+    target.appendChild(c);
+  }
+  source.remove();
+  const r = document.createRange();
+  r.setStart(target, joinOffset);
+  r.collapse(true);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(r);
+}
+
+function handleLineMerge(isBackspace) {
+  const editor = getEditor();
+  const sel = window.getSelection();
+  if (!editor || !sel || !sel.rangeCount || !sel.isCollapsed) return false;
+  const range = sel.getRangeAt(0);
+  if (!editor.contains(range.startContainer)) return false;
+  const line = findLineDiv(range.startContainer, editor);
+  if (!line) return false;
+  if (!isBackspace
+      && isAtLineStart(line, range.startContainer, range.startOffset)
+      && line.childNodes.length > 1
+      && line.firstChild.nodeType === Node.ELEMENT_NODE
+      && line.firstChild.tagName === 'BR') {
+    // Stuck-state recovery: <div><br>[ce=false]…</div> with caret at line[0].
+    // The position between the BR and the next sibling is unreachable, so
+    // browser-default Delete deletes the next sibling instead of the BR.
+    line.removeChild(line.firstChild);
+    const r = document.createRange();
+    r.setStart(line, 0);
+    r.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r);
+    handleInput();
+    return true;
+  }
+  if (isBackspace) {
+    if (!isAtLineStart(line, range.startContainer, range.startOffset)) return false;
+    const prev = line.previousSibling;
+    if (!prev || prev.nodeType !== Node.ELEMENT_NODE || prev.tagName !== 'DIV') return false;
+    mergeLineDivs(prev, line);
+  } else {
+    if (!isAtLineEnd(line, range.startContainer, range.startOffset)) return false;
+    const next = line.nextSibling;
+    if (!next || next.nodeType !== Node.ELEMENT_NODE || next.tagName !== 'DIV') return false;
+    mergeLineDivs(line, next);
+  }
+  handleInput();
+  return true;
+}
+
+function insertLineBreakAtCaret() {
+  const editor = getEditor();
+  const sel = window.getSelection();
+  if (!editor || !sel || !sel.rangeCount) return;
+  let range = sel.getRangeAt(0);
+  if (!editor.contains(range.startContainer)) {
+    range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+  }
+  range.deleteContents();
+
+  // Find the current "line": nearest <div> that's a direct child of editor.
+  let line = range.startContainer;
+  while (line && line !== editor) {
+    if (line.nodeType === Node.ELEMENT_NODE && line.tagName === 'DIV' && line.parentNode === editor) break;
+    line = line.parentNode;
+  }
+
+  if (!line || line === editor) {
+    // Editor children are flat — wrap them in a single <div> so we have a
+    // line container to split. Preserve the caret across the wrap.
+    const cont = range.startContainer;
+    const offset = range.startOffset;
+    const wrapper = document.createElement('div');
+    while (editor.firstChild) wrapper.appendChild(editor.firstChild);
+    editor.appendChild(wrapper);
+    range = document.createRange();
+    if (cont === editor) {
+      // Caret was at editor[offset] — translate to wrapper[offset].
+      range.setStart(wrapper, Math.min(offset, wrapper.childNodes.length));
+    } else {
+      range.setStart(cont, offset);
+    }
+    range.collapse(true);
+    line = wrapper;
+  }
+
+  // Extract everything from the caret to the end of the line into a new <div>.
+  const tail = document.createRange();
+  tail.setStart(range.startContainer, range.startOffset);
+  tail.setEnd(line, line.childNodes.length);
+  const tailFrag = tail.extractContents();
+
+  const newLine = document.createElement('div');
+  newLine.appendChild(tailFrag);
+
+  if (line.nextSibling) editor.insertBefore(newLine, line.nextSibling);
+  else editor.appendChild(newLine);
+
+  // Range.extractContents splits the start text node, leaving an empty text
+  // node behind on the original side and another on the new side. Without
+  // cleanup, a Shift+Enter at the *end* of a line gives newLine a single
+  // empty text node — firstChild is non-null, the BR filler is skipped, and
+  // the new line collapses to zero visible height. Normalize both lines.
+  normalizeLineDiv(line);
+  normalizeLineDiv(newLine);
+
+  const r = document.createRange();
+  r.setStart(newLine, 0);
+  r.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(r);
+  handleInput();
+}
+
+function handleInput() {
+  if (_composingActive) return;
+  normalizeEditorLines();
+  updateEditorEmpty();
+  scheduleTypingCommit();
+  const val = readEditorContent().text;
+  if (val.startsWith('/') && val.length >= 1) {
+    const hits = SLASH_CMDS.filter((c) => c.cmd.startsWith(val.toLowerCase()));
+    if (hits.length) { renderSlash(hits); return; }
+  }
+  closeSlash();
+  if (!val.startsWith('/')) {
+    if (st.pickerOpen) closeModelPicker();
+    if (st.promptPickerOpen) closePromptPicker();
+  }
+}
+
+function renderSlash(cmds) {
+  closeModelPicker();
+  closePromptPicker();
+  st.slashIdx = 0;
+  document.getElementById('slash-popup').innerHTML = cmds.map((c,i) => `
+    <div class="slash-item${i===0?' hi':''}" data-cmd="${c.cmd}" onclick="applySlash('${c.cmd}')">
+      <span class="slash-cmd-n">${c.cmd}</span>
+      <span class="slash-desc">${c.desc}</span>
+      <span class="slash-hint">↵</span>
+    </div>`).join('');
+  document.getElementById('slash-popup').classList.add('open');
+}
+
+function highlightSlash() {
+  document.querySelectorAll('#slash-popup .slash-item').forEach((it,i) => {
+    const on = i===st.slashIdx;
+    it.classList.toggle('hi', on);
+    if (on) it.scrollIntoView({block: 'nearest'});
+  });
+}
+
+function closeSlash() { document.getElementById('slash-popup').classList.remove('open'); }
+
+function applySlash(cmd) {
+  closeSlash();
+  clearEditor();
+  if (cmd === '/clear') { executeClear(); return; }
+  if (cmd === '/think') { toggleThink(); return; }
+  if (cmd === '/autoedit') { toggleAutoAcceptEdits(); return; }
+  if (cmd === '/model') { openModelPicker(); return; }
+  if (cmd === '/system') { openPromptPicker(); return; }
+  if (cmd === '/save') { executeSave(); return; }
+  setEditorText(cmd + ' ');
+}
+
+function executeClear() {
+  st.conversationMessages = [];
+  invalidateTokenMeter();
+  document.getElementById('messages-area').innerHTML =
+    '<div class="sys-msg">— context cleared —</div>';
+  st.chatStickToBottom = true;
+  updateContextBadge();
+}
+
+function appendChatSysMsg(text) {
+  const area = document.getElementById('messages-area');
+  if (!area) return;
+  const div = document.createElement('div');
+  div.className = 'sys-msg';
+  div.textContent = text;
+  area.appendChild(div);
+  scrollMessagesAreaToBottom(false);
+}
+
+function defaultSaveFilename() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  return `mimi-chat-${stamp}.md`;
+}
+
+function buildConversationMarkdown() {
+  const out = [];
+  const promptName = (st.systemPromptName || 'Mimi Chat').toString();
+  const model = st.model || 'unknown model';
+  const provider = st.provider || '';
+  const stamp = new Date().toISOString();
+
+  out.push(`# Conversation — ${promptName}`);
+  out.push('');
+  out.push(`- Model: \`${model}\``);
+  if (provider) out.push(`- Provider: \`${provider}\``);
+  out.push(`- Exported: ${stamp}`);
+  if (st.systemPromptText && st.systemPromptText.trim()) {
+    out.push('');
+    out.push('<details><summary>System prompt</summary>');
+    out.push('');
+    out.push('```');
+    out.push(st.systemPromptText);
+    out.push('```');
+    out.push('');
+    out.push('</details>');
+  }
+  out.push('');
+
+  for (const msg of st.conversationMessages) {
+    if (!msg || !msg.role) continue;
+    if (msg.role === 'user') {
+      out.push('---');
+      out.push('');
+      out.push('## You');
+      out.push('');
+      if (Array.isArray(msg.content)) {
+        for (const p of msg.content) {
+          if (!p || !p.type) continue;
+          if (p.type === 'text' && p.text) {
+            out.push(String(p.text));
+            out.push('');
+          } else if (p.type === 'image_url' && p.image_url && p.image_url.url) {
+            out.push(`![image](${p.image_url.url})`);
+            out.push('');
+          }
+        }
+      } else if (msg.content != null) {
+        out.push(String(msg.content));
+        out.push('');
+      }
+    } else if (msg.role === 'assistant') {
+      out.push('## Assistant');
+      out.push('');
+      const c = msg.content == null ? '' : String(msg.content);
+      if (c.trim()) {
+        out.push(c);
+        out.push('');
+      }
+      if (Array.isArray(msg.tool_calls) && msg.tool_calls.length) {
+        out.push('<details><summary>Tool calls</summary>');
+        out.push('');
+        for (const tc of msg.tool_calls) {
+          const fn = (tc.function && tc.function.name) || '?';
+          const rawArgs = (tc.function && tc.function.arguments) || '{}';
+          let pretty = rawArgs;
+          try { pretty = JSON.stringify(JSON.parse(rawArgs), null, 2); } catch {}
+          out.push('```json');
+          out.push(`// ${fn}`);
+          out.push(pretty);
+          out.push('```');
+          out.push('');
+        }
+        out.push('</details>');
+        out.push('');
+      }
+    } else if (msg.role === 'tool') {
+      out.push('<details><summary>Tool result</summary>');
+      out.push('');
+      let body = msg.content == null ? '' : String(msg.content);
+      try { body = JSON.stringify(JSON.parse(body), null, 2); } catch {}
+      out.push('```');
+      out.push(body);
+      out.push('```');
+      out.push('');
+      out.push('</details>');
+      out.push('');
+    }
+  }
+
+  return out.join('\n');
+}
+
+async function executeSave() {
+  if (!mimiApi.has()) {
+    appendChatSysMsg('— save unavailable: no backend bridge —');
+    return;
+  }
+  const md = buildConversationMarkdown();
+  const filename = defaultSaveFilename();
+  const initialDir = st.projectDir || '';
+  const res = await mimiApi.saveTextFile(filename, md, initialDir);
+  if (res && res.ok) {
+    appendChatSysMsg(`— saved to ${res.path} —`);
+  } else if (res && res.cancelled) {
+    // User dismissed the dialog — stay quiet.
+  } else {
+    const err = (res && res.error) || 'unknown error';
+    appendChatSysMsg(`— save failed: ${err} —`);
+  }
+}
+
+// ─── CHAT: context + API base ─────────────────────────────
+function getChatV1Base() {
+  const ep = document.getElementById('api-endpoint');
+  const raw = ep && ep.value.trim() ? ep.value.trim() : '';
+  return normalizeOpenAIV1Base(raw || ENDPOINTS[st.provider]);
+}
+
+function inferModelContextLimit(modelId) {
+  const m = String(modelId || '').toLowerCase();
+  if (/\b1000000\b|\b1_?000_?000\b|1\s*m\b/.test(m)) return 1000000;
+  if (/\b262144\b|\b256000\b|256\s*k\b/.test(m)) return 262144;
+  if (/\b200000\b|200\s*k\b/.test(m)) return 200000;
+  if (/\b131072\b|\b128000\b|128\s*k\b/.test(m)) return 131072;
+  if (/\b120000\b|120\s*k\b/.test(m)) return 120000;
+  if (/\b100000\b|100\s*k\b/.test(m)) return 100000;
+  if (/\b65536\b|64\s*k\b/.test(m)) return 65536;
+  if (/\b32768\b|32\s*k\b/.test(m)) return 32768;
+  if (/\b16384\b|16\s*k\b/.test(m)) return 16384;
+  if (/\b8192\b|\b8k\b/.test(m)) return 8192;
+  if (/\b4096\b/.test(m)) return 4096;
+  if (
+    /\b(qwen3|qwen2\.5-72|deepseek-v3|llama-3\.3|llama3\.3|gpt-4\.1|gemini-2\.5|claude-sonnet-4|o3-|o4-|kimi|moonshot)\b/.test(m) ||
+    /\b(qwen2\.5-32|llama-3\.1-70|mixtral-8x22)\b/.test(m)
+  ) {
+    return 131072;
+  }
+  if (/\b(72b|90b|106b|110b|120b|200b|235b|236b|314b|405b|671b)\b/.test(m)) return 131072;
+  if (/gpt-4o|claude-3|claude-4|gemini-1\.5|gemini-2|qwen2\.5|deepseek/.test(m)) return 128000;
+  return null;
+}
+
+function resolveModelContextLimit() {
+  const mid = st.model;
+  const row = st.availableModels.find((x) => x.id === mid);
+  const apiCtx = row && row.contextTokens;
+  if (typeof apiCtx === 'number' && Number.isFinite(apiCtx) && apiCtx >= 256) {
+    return Math.floor(apiCtx);
+  }
+  const inferred = inferModelContextLimit(mid);
+  if (inferred != null) return inferred;
+  if (st.provider !== 'openai') return 131072;
+  return 8192;
+}
+
+function invalidateTokenMeter() {
+  st.tokenMeter = null;
+}
+
+/**
+ * Normalize `usage` objects from OpenAI-compatible (and common variant) chat responses.
+ */
+function normalizeChatUsage(u) {
+  if (!u || typeof u !== 'object') return null;
+  const num = (v) => {
+    const n = typeof v === 'number' && Number.isFinite(v) ? v : parseInt(String(v ?? ''), 10);
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+  };
+  let prompt =
+    num(u.prompt_tokens) ??
+    num(u.promptTokens) ??
+    num(u.input_tokens) ??
+    num(u.inputTokens) ??
+    null;
+  let completion =
+    num(u.completion_tokens) ??
+    num(u.completionTokens) ??
+    num(u.output_tokens) ??
+    num(u.outputTokens) ??
+    null;
+  const total = num(u.total_tokens) ?? num(u.totalTokens) ?? null;
+  if (prompt == null && total != null && completion != null) prompt = Math.max(0, total - completion);
+  if (completion == null && total != null && prompt != null) completion = Math.max(0, total - prompt);
+  if (prompt == null && completion == null) {
+    if (total == null) return null;
+    return { prompt: null, completion: null, total };
+  }
+  return { prompt: prompt ?? 0, completion: completion ?? 0, total };
+}
+
+/**
+ * After a completed completion, `prompt` was the input to that call; `completion` is the new
+ * assistant output. The next request's prompt ≈ prompt + completion (same bytes in context).
+ */
+function commitTokenMeterFromUsage(usage) {
+  const u = normalizeChatUsage(usage);
+  if (!u) return;
+  let nextPromptApprox;
+  if (u.prompt != null && u.completion != null) nextPromptApprox = u.prompt + u.completion;
+  else if (u.total != null) nextPromptApprox = u.total;
+  else if (u.prompt != null) nextPromptApprox = u.prompt;
+  else return;
+  st.tokenMeter = {
+    nextPromptApprox,
+    baselineMsgCount: st.conversationMessages.length,
+    systemPromptSnap: st.systemPromptText,
+  };
+}
+
+/** Fallback token estimate: code skews toward more tokens per char than prose; /3 is a safer upper-ish bound than /4. */
+function roughTok(s) {
+  if (!s) return 0;
+  return Math.ceil(String(s).length / 3);
+}
+
+function estimateMessagesPayloadTokens() {
+  const m = st.tokenMeter;
+  if (
+    m &&
+    typeof m.nextPromptApprox === 'number' &&
+    typeof m.baselineMsgCount === 'number' &&
+    typeof m.systemPromptSnap === 'string'
+  ) {
+    if (m.systemPromptSnap !== st.systemPromptText) {
+      invalidateTokenMeter();
+    } else {
+      const len = st.conversationMessages.length;
+      if (len < m.baselineMsgCount) invalidateTokenMeter();
+      else {
+        if (len === m.baselineMsgCount) return m.nextPromptApprox;
+        let tail = 0;
+        for (let i = m.baselineMsgCount; i < len; i++) {
+          tail += 4;
+          tail += roughTok(JSON.stringify(st.conversationMessages[i]));
+        }
+        return m.nextPromptApprox + tail;
+      }
+    }
+  }
+  let n = roughTok(st.systemPromptText);
+  for (const msg of st.conversationMessages) {
+    n += 4;
+    n += roughTok(JSON.stringify(msg));
+  }
+  return n;
+}
+
+function formatTokShort(n) {
+  const x = Math.max(0, Math.round(n));
+  if (x >= 1000000) return (x / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (x >= 10000) return Math.round(x / 1000) + 'k';
+  if (x >= 1000) return (x / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+  return String(x);
+}
+
+function updateContextBadge() {
+  const el = document.getElementById('ctx-badge');
+  if (!el) return;
+  const limit = resolveModelContextLimit();
+  const used = estimateMessagesPayloadTokens();
+  const pct = limit ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+  el.innerHTML = `<b>${pct}%</b> · ${formatTokShort(used)} / ${formatTokShort(limit)} tok`;
+  el.classList.toggle('ctx-badge-warn', pct >= 88);
+  const row = st.availableModels.find((x) => x.id === st.model);
+  const hasApiCtx = row && typeof row.contextTokens === 'number' && row.contextTokens >= 256;
+  const limitSrc = hasApiCtx ? 'server API' : inferModelContextLimit(st.model) != null ? 'name heuristic' : 'default';
+  const m = st.tokenMeter;
+  const usedSrc =
+    m &&
+    typeof m.nextPromptApprox === 'number' &&
+    typeof m.baselineMsgCount === 'number' &&
+    m.systemPromptSnap === st.systemPromptText &&
+    st.conversationMessages.length >= m.baselineMsgCount
+      ? 'last completion usage from server, plus ~chars/3 estimate for new lines after that'
+      : 'chars/3 heuristic over system + messages (no usage yet, or transcript changed)';
+  el.title = `Used tokens: ${usedSrc}. Limit from ${limitSrc}. Template overhead is approximate until the backend reports usage.`;
+}
+
+/** Clone messages for the wire; some OpenAI-compatible servers (e.g. LM Studio) reject `content: null`. */
+function messageForApiWire(m) {
+  if (!m || typeof m !== 'object') return m;
+  const o = { ...m };
+  if (o.role === 'assistant' && (o.content === null || o.content === undefined)) {
+    o.content = '';
+  }
+  return o;
+}
+
+function buildApiMessages() {
+  return [{ role: 'system', content: st.systemPromptText }, ...st.conversationMessages.map(messageForApiWire)];
+}
+
+/** Ask the server not to emit reasoning when the UI toggle is off (best-effort; ignored by many servers). */
+function buildThinkingRequestFlags() {
+  if (st.thinking) return {};
+  if (st.provider === 'ollama') return { think: false };
+  if (st.provider === 'lmstudio') return { enable_thinking: false };
+  return {};
+}
+
+const TOOL_PARAM_SCHEMAS = {
+  fuzzy_find_filename: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'Substring or fuzzy basename to search for.' },
+      limit: { type: 'integer', description: 'Maximum matches to return.', default: 100 },
+    },
+    required: ['query'],
+    additionalProperties: false,
+  },
+  fuzzy_find_contents: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'Literal substring to find inside files.' },
+      limit: { type: 'integer', description: 'Maximum matching lines to return.', default: 100 },
+    },
+    required: ['query'],
+    additionalProperties: false,
+  },
+  list_directory: {
+    type: 'object',
+    properties: {
+      path:  { type: 'string',  description: 'Project-relative path. Empty = project root.' },
+      depth: { type: 'integer', description: 'How many levels of subdirectories to descend. 0 = only direct children of `path`. Default 0.', default: 0, minimum: 0 },
+    },
+    additionalProperties: false,
+  },
+  read_file: {
+    type: 'object',
+    properties: {
+      path:   { type: 'string',  description: 'Project-relative file path.' },
+      offset: { type: 'integer', description: '1-based starting line for partial reads. Omit to read from the start.', minimum: 1 },
+      limit:  { type: 'integer', description: 'Number of lines to read (with `offset`). Omit to read to end of file.', minimum: 0 },
+    },
+    required: ['path'],
+    additionalProperties: false,
+  },
+  edit_file: {
+    type: 'object',
+    properties: {
+      path:    { type: 'string', description: 'Project-relative file path.' },
+      search:  { type: 'string', description: 'Exact snippet to find (must occur exactly once).' },
+      replace: { type: 'string', description: 'Replacement snippet (may be empty to delete).' },
+    },
+    required: ['path', 'search', 'replace'],
+    additionalProperties: false,
+  },
+  apply_patch: {
+    type: 'object',
+    properties: {
+      path:  { type: 'string', description: 'Project-relative file path the patch applies to.' },
+      patch: { type: 'string', description: 'Unified diff text. Must contain at least one @@ hunk header. Line numbers are treated as hints; context lines are matched against the file.' },
+    },
+    required: ['path', 'patch'],
+    additionalProperties: false,
+  },
+  append_file: {
+    type: 'object',
+    properties: {
+      path:    { type: 'string', description: 'Project-relative file path (created if missing).' },
+      content: { type: 'string', description: 'Text to append verbatim.' },
+    },
+    required: ['path', 'content'],
+    additionalProperties: false,
+  },
+  mkdir: {
+    type: 'object',
+    properties: {
+      path:      { type: 'string', description: 'Project-relative directory path to create.' },
+      recursive: { type: 'boolean', description: 'Create parent directories as needed.', default: true },
+    },
+    required: ['path'],
+    additionalProperties: false,
+  },
+  rm: {
+    type: 'object',
+    properties: {
+      paths:     { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Project-relative paths to remove. Pass multiple to delete several entries in one call.' },
+      recursive: { type: 'boolean', description: 'Remove directories and their contents. Applies to every path in the call.', default: false },
+    },
+    required: ['paths'],
+    additionalProperties: false,
+  },
+};
+
+function buildToolsPayload() {
+  return builtinTools
+    .filter((t) => t.perm !== 'disabled')
+    .map((t) => ({
+      type: 'function',
+      function: {
+        name: t.name,
+        description: t.desc,
+        parameters: TOOL_PARAM_SCHEMAS[t.name] || { type: 'object', properties: {}, additionalProperties: true },
+      },
+    }));
+}
+
+function _formatBytes(n) {
+  if (n == null || !Number.isFinite(Number(n))) return '?';
+  const b = Number(n);
+  if (b < 1024) return b + ' B';
+  if (b < 1024 * 1024) return (b / 1024).toFixed(1).replace(/\.0$/, '') + ' KB';
+  return (b / (1024 * 1024)).toFixed(2).replace(/\.00$/, '') + ' MB';
+}
+
+function _decisionBadgeHtml(decision, denyReason) {
+  if (decision === 'allow')      return `<span class="tool-decision tool-decision-allow">✓ allowed</span>`;
+  if (decision === 'allow-auto') return `<span class="tool-decision tool-decision-allow">✓ allowed (auto)</span>`;
+  if (decision === 'deny') {
+    const r = denyReason ? ` <span class="tool-decision-reason">— ${esc(denyReason)}</span>` : '';
+    return `<span class="tool-decision tool-decision-deny">✗ denied</span>${r}`;
+  }
+  if (decision === 'error') return `<span class="tool-decision tool-decision-deny">✗ error</span>`;
+  return '';
+}
+
+/** Map a file path to an hljs language name. Returns '' if unknown — caller
+ *  can decide to fall back to highlightAuto or skip highlighting. */
+function _langForPath(path) {
+  if (!path) return '';
+  const s = String(path);
+  const base = s.split(/[\\/]/).pop().toLowerCase();
+  if (base === 'dockerfile' || base.endsWith('.dockerfile')) return 'dockerfile';
+  if (base === 'makefile') return 'makefile';
+  if (base === 'cmakelists.txt') return 'cmake';
+  const m = base.match(/\.([^.]+)$/);
+  if (!m) return '';
+  const ext = m[1];
+  const map = {
+    js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
+    ts: 'typescript', tsx: 'typescript',
+    py: 'python', pyw: 'python', pyi: 'python',
+    sh: 'bash', bash: 'bash', zsh: 'bash',
+    json: 'json', jsonc: 'json',
+    md: 'markdown', markdown: 'markdown', mkd: 'markdown',
+    yaml: 'yaml', yml: 'yaml',
+    html: 'xml', htm: 'xml', xml: 'xml', svg: 'xml',
+    css: 'css', scss: 'scss', sass: 'scss', less: 'less',
+    c: 'c', h: 'c',
+    cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp', hxx: 'cpp', hh: 'cpp',
+    rs: 'rust', go: 'go', sql: 'sql',
+    rb: 'ruby', php: 'php',
+    java: 'java', kt: 'kotlin', kts: 'kotlin',
+    swift: 'swift', scala: 'scala', cs: 'csharp',
+    pl: 'perl', lua: 'lua', vim: 'vim',
+    toml: 'ini', ini: 'ini', cfg: 'ini', conf: 'ini',
+    diff: 'diff', patch: 'diff',
+    dockerfile: 'dockerfile',
+  };
+  return map[ext] || '';
+}
+
+/** Run hljs on `content` for a known `lang`. No auto-detect — if `lang` is
+ *  empty or unknown, return escaped plain text. (Auto-detect is fine for
+ *  user-typed code fences in chat where they intentionally fenced something
+ *  as code, but it's wrong for arbitrary file contents like .txt/.log where
+ *  hljs will hallucinate keywords.) */
+function _hljsHighlightInner(content, lang) {
+  const src = String(content == null ? '' : content);
+  if (!src) return '';
+  if (typeof hljs === 'undefined' || !lang || !hljs.getLanguage(lang)) {
+    return esc(src);
+  }
+  try {
+    return hljs.highlight(src, { language: lang, ignoreIllegals: true }).value;
+  } catch (_e) {
+    return esc(src);
+  }
+}
+
+/** <pre class="tool-card-pre"><code class="hljs language-X">…</code></pre> */
+function _hljsCodeBlock(content, lang) {
+  const src = String(content == null ? '' : content);
+  if (!src) return '';
+  const inner = _hljsHighlightInner(src, lang);
+  const cls = 'hljs' + (lang ? ' language-' + esc(lang) : '');
+  return `<pre class="tool-card-pre"><code class="${cls}">${inner}</code></pre>`;
+}
+
+function _renderDiffHtml(diff, lang) {
+  const lines = String(diff || '').split('\n');
+  const rows = lines.map((line) => {
+    let cls = 'diff-ctx';
+    let prefix = '';
+    let body = line;
+    if (line.startsWith('+++') || line.startsWith('---')) {
+      cls = 'diff-fileh';
+    } else if (line.startsWith('@@')) {
+      cls = 'diff-hunk';
+    } else if (line.startsWith('+')) {
+      cls = 'diff-add'; prefix = '+'; body = line.slice(1);
+    } else if (line.startsWith('-')) {
+      cls = 'diff-del'; prefix = '-'; body = line.slice(1);
+    } else if (line.startsWith(' ')) {
+      prefix = ' '; body = line.slice(1);
+    }
+    let inner;
+    if (cls === 'diff-fileh' || cls === 'diff-hunk') {
+      inner = esc(line);
+    } else if (lang && body && typeof hljs !== 'undefined' && hljs.getLanguage(lang)) {
+      // Per-line highlight within the file's language. Multi-line constructs
+      // won't survive line-splitting but for diff hunks this is rare and the
+      // alternative (no color) is worse.
+      let hi;
+      try {
+        hi = hljs.highlight(body, { language: lang, ignoreIllegals: true }).value;
+      } catch (_e) {
+        hi = esc(body);
+      }
+      inner = (prefix ? esc(prefix) : '') + hi;
+    } else {
+      inner = esc(line);
+    }
+    return `<div class="${cls}">${inner || '&nbsp;'}</div>`;
+  });
+  return `<pre class="diff-pre">${rows.join('')}</pre>`;
+}
+
+function _toolCardKv(k, v) {
+  return `<div class="tool-card-row"><span class="tool-card-k">${esc(k)}</span><span class="tool-card-v">${esc(v)}</span></div>`;
+}
+
+function _renderToolCardBody(info, errorMsg) {
+  const i = info && typeof info === 'object' ? info : {};
+  const kind = i.kind || i.name || 'tool';
+  if (errorMsg) {
+    let head = '';
+    if (i.path)  head += _toolCardKv('path', i.path);
+    if (i.query) head += _toolCardKv('query', i.query);
+    return head + `<div class="tool-card-err">${esc(errorMsg)}</div>`;
+  }
+  if (kind === 'edit_file') {
+    return _toolCardKv('path', i.path || '')
+      + _toolCardKv('change', `+${i.added || 0} −${i.removed || 0}`)
+      + _renderDiffHtml(i.diff || '', _langForPath(i.path));
+  }
+  if (kind === 'append_file') {
+    let s = _toolCardKv('path', i.path || '')
+      + _toolCardKv(
+          i.exists ? 'append' : 'create + write',
+          `${_formatBytes(i.appended_bytes)}${i.size_after != null ? ' · final ' + _formatBytes(i.size_after) : ''}`
+        );
+    if (typeof i.content === 'string') s += _hljsCodeBlock(i.content, _langForPath(i.path));
+    return s;
+  }
+  if (kind === 'read_file') {
+    let s = _toolCardKv('path', i.path || '')
+      + _toolCardKv('size', `${_formatBytes(i.size)}`);
+    if (i.partial) {
+      const off = Number.isFinite(i.offset) ? i.offset : 1;
+      const got = Number.isFinite(i.lines_returned) ? i.lines_returned : 0;
+      const last = got > 0 ? off + got - 1 : off;
+      const total = (i.total_lines != null) ? i.total_lines : '?';
+      s += _toolCardKv('lines', `${off}–${last} of ${total}${i.eof ? '' : ' (more remaining)'}`);
+    } else if (i.total_lines != null) {
+      s += _toolCardKv('lines', `${i.total_lines} total`);
+    }
+    if (i.tokens != null) s += _toolCardKv('~tokens', String(i.tokens));
+    const body = (typeof i.content === 'string' && i.content) ? i.content
+               : (typeof i.preview === 'string' ? i.preview : '');
+    if (body) s += _hljsCodeBlock(body, _langForPath(i.path));
+    return s;
+  }
+  if (kind === 'mkdir') {
+    let s = _toolCardKv('path', i.path || '')
+      + _toolCardKv('recursive', i.recursive ? 'yes' : 'no');
+    if (i.exists) s += `<div class="tool-card-note">already exists</div>`;
+    return s;
+  }
+  if (kind === 'rm') {
+    const entries = Array.isArray(i.paths) ? i.paths : [];
+    const rows = [];
+    let hasNonEmptyDir = false;
+    for (const e of entries) {
+      if (e.is_dir && !i.recursive) hasNonEmptyDir = true;
+      for (const x of (e.items || [])) {
+        rows.push(`<div class="rm-row rm-${esc(x.kind)}">${x.kind === 'dir' ? '📁' : '📄'} ${esc(x.name)}</div>`);
+      }
+    }
+    let s = _toolCardKv('recursive', i.recursive ? 'yes' : 'no');
+    if (hasNonEmptyDir) {
+      s += `<div class="tool-card-note tool-card-warn">recursive flag is off — non-empty directories will be skipped</div>`;
+    }
+    s += `<div class="rm-list">${rows.join('')}${i.truncated ? '<div class="tool-card-note">… more entries omitted</div>' : ''}</div>`;
+    return s;
+  }
+  if (kind === 'list_directory') {
+    let s = _toolCardKv('path', i.path ? i.path : '(project root)')
+      + _toolCardKv('depth', String(i.depth ?? 0));
+    const entries = Array.isArray(i.entries) ? i.entries : null;
+    if (entries) {
+      s += _toolCardKv('entries', String(entries.length) + (i.truncated ? ' (truncated)' : ''));
+      if (entries.length === 0) {
+        s += `<div class="tool-card-note">empty directory</div>`;
+      } else {
+        const rows = entries.map((e) => {
+          const icon = e.kind === 'dir' ? '📁' : '📄';
+          const sz = (e.kind === 'file' && e.size != null)
+            ? `<span class="entry-size">${esc(_formatBytes(e.size))}</span>`
+            : '';
+          return `<div class="entry-row entry-${esc(e.kind)}"><span class="entry-icon">${icon}</span><span class="entry-name">${esc(e.name)}</span>${sz}</div>`;
+        }).join('');
+        s += `<div class="entry-list">${rows}${i.truncated ? '<div class="tool-card-note">… more entries omitted</div>' : ''}</div>`;
+      }
+    }
+    return s;
+  }
+  if (kind === 'fuzzy_find_filename') {
+    let s = _toolCardKv('query', i.query || '')
+      + _toolCardKv('limit', String(i.limit ?? ''));
+    const matches = Array.isArray(i.matches) ? i.matches : null;
+    if (matches) {
+      const total = (typeof i.total === 'number') ? i.total : matches.length;
+      s += _toolCardKv('matches', `${matches.length} shown · ${total} found`);
+      if (matches.length === 0) {
+        s += `<div class="tool-card-note">no matches</div>`;
+      } else {
+        const rows = matches.map((p) =>
+          `<div class="entry-row entry-file"><span class="entry-icon">📄</span><span class="entry-name">${esc(p)}</span></div>`
+        ).join('');
+        s += `<div class="entry-list">${rows}</div>`;
+      }
+    }
+    return s;
+  }
+  if (kind === 'fuzzy_find_contents') {
+    let s = _toolCardKv('query', i.query || '')
+      + _toolCardKv('limit', String(i.limit ?? ''));
+    const matches = Array.isArray(i.matches) ? i.matches : null;
+    if (matches) {
+      s += _toolCardKv('hits', String(matches.length) + (i.truncated ? ' (truncated)' : ''));
+      if (matches.length === 0) {
+        s += `<div class="tool-card-note">no matches</div>`;
+      } else {
+        const rows = matches.map((m) => {
+          const lang = _langForPath(m.path);
+          const text = String(m.text || '');
+          let body;
+          if (lang && text && typeof hljs !== 'undefined' && hljs.getLanguage(lang)) {
+            try { body = hljs.highlight(text, { language: lang, ignoreIllegals: true }).value; }
+            catch (_e) { body = esc(text); }
+          } else {
+            body = esc(text);
+          }
+          return `<div class="hit-row"><span class="hit-loc">${esc(m.path || '')}<span class="hit-line">:${esc(String(m.line ?? ''))}</span></span><span class="hit-text hljs">${body}</span></div>`;
+        }).join('');
+        s += `<div class="hit-list">${rows}${i.truncated ? '<div class="tool-card-note">… more hits omitted</div>' : ''}</div>`;
+      }
+    }
+    return s;
+  }
+  return _hljsCodeBlock(JSON.stringify(i, null, 2), 'json') ||
+         `<pre class="tool-card-pre">${esc(JSON.stringify(i, null, 2))}</pre>`;
+}
+
+function renderToolCard(info, decision, denyReason, errorMsg) {
+  const i = info && typeof info === 'object' ? info : {};
+  const kind = i.kind || i.name || 'tool';
+  const decHtml = _decisionBadgeHtml(decision, denyReason);
+  const body = _renderToolCardBody(info, errorMsg);
+  return `
+    <div class="tool-card" data-kind="${esc(kind)}">
+      <div class="tool-card-hdr">
+        <span class="tool-card-name">${esc(kind)}</span>
+        <span class="tool-card-decision">${decHtml}</span>
+      </div>
+      <div class="tool-card-body">${body}</div>
+    </div>
+  `;
+}
+
+function appendToolCard(info, decision, denyReason, errorMsg) {
+  const area = document.getElementById('messages-area');
+  if (!area) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'tool-card-wrap';
+  wrap.innerHTML = renderToolCard(info, decision, denyReason, errorMsg);
+  area.appendChild(wrap);
+  ensureChatElementVisible(wrap);
+  updateScrollBtn();
+}
+
+function toolMetaByFunctionName(name) {
+  return builtinTools.find((x) => x.name === name);
+}
+
+/** @returns {'allow'|'deny'|'need_ask'} */
+function classifyToolGate(meta, name) {
+  if (!meta || meta.perm === 'disabled') return 'deny';
+  if (meta.perm === 'allow') return 'allow';
+  if (meta.perm === 'ask') {
+    if (st.autoAcceptEdits) return 'allow';
+    return 'need_ask';
+  }
+  return 'need_ask';
+}
+
+let _toolPermResolve = null;
+
+function initToolPermOverlay() {
+  const ov = document.getElementById('tool-perm-overlay');
+  if (!ov || ov.dataset.mimiPermBound) return;
+  ov.dataset.mimiPermBound = '1';
+  const card = ov.querySelector('.modal-card');
+  const reasonTa = () => document.getElementById('tool-perm-deny-reason');
+
+  const closeModal = () => {
+    ov.classList.remove('open');
+    ov.setAttribute('aria-hidden', 'true');
+  };
+
+  const resolveAllow = () => {
+    const ta = reasonTa();
+    if (ta) ta.value = '';
+    closeModal();
+    const fn = _toolPermResolve;
+    _toolPermResolve = null;
+    if (fn) fn({ ok: true, denyReason: '' });
+  };
+
+  const resolveDeny = () => {
+    const ta = reasonTa();
+    const denyReason = ta ? String(ta.value || '').trim() : '';
+    if (ta) ta.value = '';
+    closeModal();
+    const fn = _toolPermResolve;
+    _toolPermResolve = null;
+    if (fn) fn({ ok: false, denyReason });
+  };
+
+  const stop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  document.getElementById('tool-perm-allow').addEventListener('click', (e) => {
+    stop(e);
+    resolveAllow();
+  });
+  document.getElementById('tool-perm-deny').addEventListener('click', (e) => {
+    stop(e);
+    resolveDeny();
+  });
+  if (card) {
+    card.addEventListener('click', (e) => e.stopPropagation());
+  }
+
+  // Hotkeys while modal is open: Ctrl+Enter = allow, Esc = deny (current reason),
+  // Alt+Esc = focus the deny-reason textarea so the user can type one. Capture
+  // phase so this beats the composer's keydown when focus is elsewhere.
+  document.addEventListener('keydown', (e) => {
+    if (!ov.classList.contains('open')) return;
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      stop(e);
+      resolveAllow();
+      return;
+    }
+    if (e.key === 'Escape' && e.altKey) {
+      stop(e);
+      const ta = reasonTa();
+      if (ta) ta.focus();
+      return;
+    }
+    if (e.key === 'Escape') {
+      stop(e);
+      resolveDeny();
+      return;
+    }
+  }, true);
+}
+
+/**
+ * Format a tool failure as a plain-text message for the model. Plain text is
+ * surfaced more reliably than nested JSON across open-source models.
+ *
+ * @param {string} name
+ * @param {string} errMsg
+ * @param {'retry'|'permanent'} mode
+ */
+function formatToolErrorForModel(name, errMsg, mode) {
+  if (mode === 'permanent') {
+    return `Tool "${name}" failed: ${errMsg}\n\nThis tool cannot be used right now. Do not retry it.`;
+  }
+  return `Tool "${name}" failed: ${errMsg}\n\nRetry the call with corrected arguments. If the file or directory state may have shifted, use read_file or list_directory to refresh your view first, then retry.`;
+}
+
+/**
+ * Show the permission modal rendering the same card the chat history will keep.
+ * @param {{ name: string, desc?: string, info?: object | null, errorMsg?: string }} opts
+ * @returns {Promise<{ ok: boolean, denyReason: string }>}
+ */
+function requestToolPermission({ name, desc, info, errorMsg }) {
+  return new Promise((resolve) => {
+    _toolPermResolve = resolve;
+    document.getElementById('tool-perm-title').textContent = errorMsg
+      ? `Tool errored: ${name}`
+      : `Allow tool: ${name}?`;
+    document.getElementById('tool-perm-sub').textContent = desc || 'Review the call before allowing.';
+    const previewEl = document.getElementById('tool-perm-preview');
+    if (previewEl) {
+      previewEl.innerHTML = _renderToolCardBody(info || { kind: name }, errorMsg || '');
+    }
+    const ta = document.getElementById('tool-perm-deny-reason');
+    if (ta) ta.value = '';
+    const ov = document.getElementById('tool-perm-overlay');
+    ov.classList.add('open');
+    ov.setAttribute('aria-hidden', 'false');
+  });
+}
+
+/** Distance from bottom (px) still treated as "following" the live stream. */
+const CHAT_STICK_BOTTOM_PX = 48;
+
+/**
+ * @returns {{ area: HTMLElement | null, internal: boolean, distFromBottom: number }}
+ */
+function getChatTranscriptScrollMetrics() {
+  const area = document.getElementById('messages-area');
+  if (!area) return { area: null, internal: false, distFromBottom: 0 };
+  const slack = area.scrollHeight - area.clientHeight;
+  const internal = slack > 2;
+  if (internal) {
+    const distFromBottom = area.scrollHeight - area.scrollTop - area.clientHeight;
+    return { area, internal: true, distFromBottom };
+  }
+  const dock = document.getElementById('chat-dock');
+  const dockTop = dock ? dock.getBoundingClientRect().top : window.innerHeight;
+  const last = area.lastElementChild;
+  let distFromBottom = 0;
+  if (last) distFromBottom = Math.max(0, last.getBoundingClientRect().bottom - dockTop);
+  return { area, internal: false, distFromBottom };
+}
+
+/**
+ * @param {boolean} [force] When true, pin to bottom and scroll (user jumped to latest, errors, etc.).
+ *   When false/omitted, only scroll if the user is already following the bottom (see `st.chatStickToBottom`).
+ */
+function scrollMessagesAreaToBottom(force) {
+  const m = getChatTranscriptScrollMetrics();
+  if (!m.area) return;
+  if (force === true) st.chatStickToBottom = true;
+  else if (!st.chatStickToBottom) return;
+
+  if (m.internal) {
+    const max = Math.max(0, m.area.scrollHeight - m.area.clientHeight);
+    m.area.scrollTop = max;
+    return;
+  }
+  const last = m.area.lastElementChild;
+  if (last) last.scrollIntoView({ block: 'end', behavior: force === true ? 'smooth' : 'auto' });
+}
+
+function appendToolTrace(text) {
+  const area = document.getElementById('messages-area');
+  const row = document.createElement('div');
+  row.className = 'tool-trace';
+  row.textContent = text;
+  area.appendChild(row);
+  ensureChatElementVisible(row);
+  updateScrollBtn();
+}
+
+function formatHttpErrorBody(status, rawText) {
+  const raw = String(rawText || '').trim();
+  if (!raw) return `Chat request failed (HTTP ${status}). Empty response body.`;
+  try {
+    const j = JSON.parse(raw);
+    if (j && j.error) {
+      const e = j.error;
+      if (typeof e === 'string') return `Chat request failed (HTTP ${status}):\n\n${e}`;
+      const msg = e.message || e.code || JSON.stringify(e);
+      return `Chat request failed (HTTP ${status}):\n\n${msg}`;
+    }
+    return `Chat request failed (HTTP ${status}):\n\n${JSON.stringify(j, null, 2)}`;
+  } catch {
+    return `Chat request failed (HTTP ${status}):\n\n${raw.length > 12000 ? raw.slice(0, 12000) + '\n… (truncated)' : raw}`;
+  }
+}
+
+function appendChatError(message) {
+  const area = document.getElementById('messages-area');
+  const wrap = document.createElement('div');
+  wrap.className = 'msg ai chat-err-msg';
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble chat-err-bubble';
+  const pre = document.createElement('pre');
+  pre.className = 'chat-err-pre';
+  pre.textContent = message;
+  bubble.appendChild(pre);
+  wrap.appendChild(bubble);
+  area.appendChild(wrap);
+  scrollMessagesAreaToBottom(true);
+  updateScrollBtn();
+}
+
+function setChatBusy(busy) {
+  st.chatInFlight = !!busy;
+  const send = document.getElementById('send-btn');
+  const stop = document.getElementById('stop-btn');
+  const ta = document.getElementById('msg-input');
+  if (send) {
+    send.disabled = !!busy;
+    send.hidden = !!busy;
+  }
+  if (stop) stop.hidden = !busy;
+  // Do not disable the textarea: that drops focus in WebView/Chromium. Busy state is enforced in sendMessage / handleKey.
+  if (ta) ta.classList.toggle('msg-ta-busy', !!busy);
+}
+
+function cancelInFlightChat() {
+  st.chatAbortController?.abort();
+}
+
+function appendStoppedNotice() {
+  const area = document.getElementById('messages-area');
+  if (!area) return;
+  const div = document.createElement('div');
+  div.className = 'sys-msg';
+  div.textContent = '— generation stopped —';
+  area.appendChild(div);
+  scrollMessagesAreaToBottom(false);
+}
+
+/** Restore typing focus after generation unless a modal/picker is open. */
+function focusComposerIfChat() {
+  const chat = document.getElementById('screen-chat');
+  const ta = document.getElementById('msg-input');
+  if (!chat || !chat.classList.contains('active') || !ta) return;
+  const ov = document.getElementById('tool-perm-overlay');
+  if (ov && ov.classList.contains('open')) return;
+  if (st.pickerOpen || st.promptPickerOpen) return;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      if (st.chatInFlight) return;
+      ta.focus({ preventScroll: true });
+    });
+  });
+}
+
+function isAssistantTurnEmptyReply(assistantMsg) {
+  if (!assistantMsg || assistantMsg.role !== 'assistant') return false;
+  const tcs = assistantMsg.tool_calls;
+  if (tcs && tcs.length > 0) return false;
+  const c = assistantMsg.content;
+  if (c == null || c === '') return true;
+  return !String(c).trim();
+}
+
+function removeLastAssistantMessageBubble() {
+  const area = document.getElementById('messages-area');
+  if (!area) return;
+  const nodes = area.querySelectorAll('.msg.ai:not(.chat-err-msg)');
+  const last = nodes.length ? nodes[nodes.length - 1] : null;
+  if (last) last.remove();
+}
+
+function isAbortLikeError(e) {
+  if (!e) return false;
+  if (e.name === 'AbortError') return true;
+  if (e.code === 20) return true;
+  return false;
+}
+
+/**
+ * One streamed completion; creates a new assistant row and updates it live.
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<{ assistantMsg: object, finishReason: string, hadReasoning: boolean, usage: object|null, cancelled?: boolean }>}
+ */
+async function streamAssistantIntoNewBubble(apiMessages, signal) {
+  const area = document.getElementById('messages-area');
+  const wrap = document.createElement('div');
+  wrap.className = 'msg ai';
+  const think = document.createElement('div');
+  think.className = 'think-block think-streaming';
+  think.style.display = 'none';
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble assistant-stream assistant-pending';
+  bubble.innerHTML =
+    '<div class="chat-pending-inner" aria-busy="true">' +
+    '<span class="chat-pending-dots" aria-hidden="true"><span></span><span></span><span></span></span>' +
+    '<span>Waiting for model…</span></div>';
+  wrap.appendChild(think);
+  wrap.appendChild(bubble);
+  area.appendChild(wrap);
+  // First assistant bubble of the turn rides under the user message anchored
+  // at top. For continuations after tool calls, anchor the most recent tool
+  // card at the top so its details stay readable while the next assistant
+  // message streams in below — don't skip past it onto the new bubble.
+  const lastToolCard = findLastPrecedingToolCard(wrap);
+  // Element to re-pin at top once thoughts give way to content/tools — keeps
+  // the turn's framing identical to the no-thoughts path.
+  let turnAnchor = lastToolCard;
+  if (!turnAnchor) {
+    const userMsgs = area.querySelectorAll('.msg.user');
+    turnAnchor = userMsgs.length ? userMsgs[userMsgs.length - 1] : null;
+  }
+  if (lastToolCard) {
+    scrollMessageToTop(lastToolCard, { smooth: true });
+  } else {
+    scrollMessagesAreaToBottom(false);
+  }
+  updateScrollBtn();
+
+  const base = getChatV1Base();
+  const url = base + '/chat/completions';
+  const tools = buildToolsPayload();
+  const body = {
+    model: st.model,
+    messages: apiMessages,
+    stream: true,
+    stream_options: { include_usage: true },
+    temperature: st.temperature,
+    top_p: st.topP,
+    top_k: st.topK,
+    min_p: st.minP,
+    repeat_penalty: st.repeatPenalty,
+    ...buildThinkingRequestFlags(),
+    ...(tools.length ? { tools } : {}),
+  };
+
+  let reader = null;
+  let cancelledUserStop = false;
+
+  let content = '';
+  let reasoning = '';
+  const toolMap = new Map();
+  let finishReason = null;
+  let lastUsage = null;
+
+  const applyToolDelta = (arr) => {
+    if (!Array.isArray(arr)) return;
+    for (const tc of arr) {
+      const i = tc.index != null ? tc.index : 0;
+      if (!toolMap.has(i)) {
+        toolMap.set(i, { id: '', type: 'function', function: { name: '', arguments: '' } });
+      }
+      const slot = toolMap.get(i);
+      if (tc.id) slot.id = tc.id;
+      if (tc.type) slot.type = tc.type;
+      if (tc.function) {
+        if (tc.function.name) slot.function.name += tc.function.name;
+        if (tc.function.arguments) slot.function.arguments += tc.function.arguments;
+      }
+    }
+  };
+
+  // While the model is streaming reasoning before any visible content, the
+  // turn anchor sits off-screen above and the streaming-thoughts block runs
+  // off the bottom of the viewport — so the user can't watch the thoughts
+  // they're about to lose to auto-collapse. `followingThoughts` flips on for
+  // the thoughts-only phase and flips off the moment content/tool calls
+  // appear; transitioning out re-pins the turn anchor at top.
+  let followingThoughts = false;
+  // Tracks the collapse done eagerly when content/tools start arriving (so
+  // the user reads the assistant reply against a tidy summary, not a wall
+  // of reasoning). `finishAssistantBubble` skips its own collapse when this
+  // already happened.
+  let thoughtsCollapsed = false;
+  let collapsedBody = null;
+
+  const collapseThoughtsInPlace = () => {
+    if (thoughtsCollapsed) return;
+    if (!reasoning.trim()) return;
+    const det = document.createElement('details');
+    det.className = 'think-block think-details';
+    const sum = document.createElement('summary');
+    sum.className = 'think-summary';
+    sum.innerHTML =
+      '<span class="think-chev" aria-hidden="true">▼</span><span class="think-summary-txt">Thoughts</span>';
+    const body = document.createElement('div');
+    body.className = 'think-body';
+    body.textContent = reasoning.trim();
+    det.appendChild(sum);
+    det.appendChild(body);
+    if (think.parentNode) think.replaceWith(det);
+    thoughtsCollapsed = true;
+    collapsedBody = body;
+  };
+
+  const followThinkBottom = () => {
+    if (!think.isConnected || think.style.display === 'none') return;
+    requestAnimationFrame(() => {
+      if (!think.isConnected || think.style.display === 'none') return;
+      const dock = document.getElementById('chat-dock');
+      if (!dock) return;
+      const tBot = think.getBoundingClientRect().bottom;
+      const dockTop = dock.getBoundingClientRect().top;
+      const overflow = tBot - (dockTop - 8);
+      if (overflow <= 0) return;
+      // Pour the overflow into whichever ancestor will actually scroll.
+      // messages-area is the usual scroller; fall back to the page.
+      let remaining = overflow;
+      const m = getChatTranscriptScrollMetrics();
+      if (m.area) {
+        const max = Math.max(0, m.area.scrollHeight - m.area.clientHeight);
+        const want = Math.min(m.area.scrollTop + remaining, max);
+        const moved = want - m.area.scrollTop;
+        if (moved > 0) {
+          m.area.scrollTop = want;
+          remaining -= moved;
+        }
+      }
+      if (remaining > 0) {
+        const scroller = document.scrollingElement || document.documentElement;
+        if (scroller) scroller.scrollTop = scroller.scrollTop + remaining;
+      }
+    });
+  };
+
+  const render = () => {
+    const showThink = st.thinking && reasoning.trim();
+    const hasStreamBody = showThink || content.length > 0 || toolMap.size > 0;
+    if (!hasStreamBody) return;
+
+    bubble.classList.remove('assistant-pending');
+
+    if (showThink) {
+      if (thoughtsCollapsed) {
+        // Late reasoning chunks (rare): keep the collapsed body in sync so
+        // expanding the <details> shows the full thought, not a stale prefix.
+        if (collapsedBody) collapsedBody.textContent = reasoning.trim();
+      } else {
+        think.style.display = 'block';
+        think.textContent = reasoning.trim();
+      }
+    } else if (!thoughtsCollapsed) {
+      think.style.display = 'none';
+    }
+    if (content) {
+      bubble.classList.add('md-content');
+      bubble.innerHTML = renderMarkdownSafe(content) + '<span class="stream-cursor">▍</span>';
+      enhanceCodeBlocks(bubble);
+    } else {
+      bubble.classList.remove('md-content');
+      bubble.innerHTML = '<span class="stream-cursor">▍</span>';
+    }
+    // Some providers prefix the assistant content with whitespace before any
+    // real tokens; treat whitespace-only content as still in the
+    // thoughts-only phase so we don't bail out of the follow logic too early.
+    const inThoughtsOnlyPhase =
+      !thoughtsCollapsed && showThink && !content.trim() && toolMap.size === 0;
+    if (inThoughtsOnlyPhase) {
+      followingThoughts = true;
+      followThinkBottom();
+    } else {
+      if (followingThoughts) {
+        followingThoughts = false;
+        // Collapse the live thoughts immediately on the thoughts→content (or
+        // thoughts→tool) transition so the user reads the assistant reply
+        // under a tidy summary, then re-pin the turn anchor at top.
+        collapseThoughtsInPlace();
+        if (turnAnchor) scrollMessageToTop(turnAnchor, { smooth: true });
+      }
+      scrollMessagesAreaToBottom(false);
+    }
+    updateScrollBtn();
+  };
+
+  const stoppedFoot =
+    '<p class="gen-stopped-foot" role="note">Generation stopped — partial reply above.</p>';
+
+  function finishAssistantBubble(wasStopped) {
+    bubble.classList.remove('assistant-pending');
+
+    const tool_calls = [];
+    if (!wasStopped) {
+      for (const [idx, v] of [...toolMap.entries()].sort((a, b) => a[0] - b[0])) {
+        const nm = (v.function && v.function.name) || '';
+        if (!nm) continue;
+        tool_calls.push({
+          id: v.id || `call_${idx}`,
+          type: 'function',
+          function: { name: nm, arguments: (v.function && v.function.arguments) || '{}' },
+        });
+      }
+    }
+
+    const hasTools = tool_calls.length > 0;
+    const contentTrim = content.trim();
+    const assistantMsg = { role: 'assistant' };
+    if (contentTrim) assistantMsg.content = content;
+    else if (hasTools) assistantMsg.content = null;
+    else assistantMsg.content = '';
+    if (hasTools) assistantMsg.tool_calls = tool_calls;
+
+    if (thoughtsCollapsed) {
+      // Already collapsed at the thoughts→content transition; just keep the
+      // collapsed body's text current with the final reasoning string.
+      if (collapsedBody) collapsedBody.textContent = reasoning.trim();
+    } else if (st.thinking && reasoning.trim()) {
+      const rtxt = reasoning.trim();
+      const det = document.createElement('details');
+      det.className = 'think-block think-details';
+      const sum = document.createElement('summary');
+      sum.className = 'think-summary';
+      sum.innerHTML =
+        '<span class="think-chev" aria-hidden="true">▼</span><span class="think-summary-txt">Thoughts</span>';
+      const thinkBody = document.createElement('div');
+      thinkBody.className = 'think-body';
+      thinkBody.textContent = rtxt;
+      det.appendChild(sum);
+      det.appendChild(thinkBody);
+      think.replaceWith(det);
+    } else {
+      think.style.display = 'none';
+      think.textContent = '';
+    }
+    bubble.classList.remove('assistant-stream');
+    if (contentTrim) {
+      bubble.classList.add('md-content');
+      bubble.innerHTML = renderMarkdownSafe(contentTrim) + (wasStopped ? stoppedFoot : '');
+      enhanceCodeBlocks(bubble);
+    } else if (hasTools) {
+      bubble.classList.remove('md-content');
+      bubble.innerHTML = '<span class="ai-tool-hint">Calling tools…</span>';
+    } else if (wasStopped && reasoning.trim()) {
+      bubble.classList.remove('md-content');
+      bubble.innerHTML = stoppedFoot;
+    } else {
+      bubble.classList.remove('md-content');
+      bubble.innerHTML = wasStopped
+        ? '<span class="ai-placeholder">(generation stopped)</span>'
+        : '<span class="ai-placeholder">(empty reply)</span>';
+    }
+
+    const hadReasoning = !!reasoning.trim();
+    // Stream ended without ever leaving the thoughts-only phase: the
+    // collapse just shrunk the bubble, so re-pin the turn anchor so the
+    // viewport doesn't sit on the gap left behind.
+    if (followingThoughts && turnAnchor) {
+      scrollMessageToTop(turnAnchor, { smooth: true });
+    }
+    followingThoughts = false;
+    updateScrollBtn();
+    return { assistantMsg, hadReasoning };
+  }
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify(body),
+      signal,
+    });
+
+    if (!res.ok) {
+      const t = await res.text();
+      wrap.remove();
+      throw new Error(formatHttpErrorBody(res.status, t));
+    }
+
+    reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buffer = '';
+    let doneSignal = false;
+
+    const processSseLine = (line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith(':')) return;
+      if (!trimmed.startsWith('data:')) return;
+      const data = line.slice(line.indexOf('data:') + 5).trim();
+      if (data === '[DONE]') {
+        doneSignal = true;
+        return;
+      }
+      let json;
+      try {
+        json = JSON.parse(data);
+      } catch {
+        return;
+      }
+      if (json.error) {
+        wrap.remove();
+        throw new Error(json.error.message || JSON.stringify(json.error));
+      }
+      if (json.usage && typeof json.usage === 'object') {
+        lastUsage = lastUsage ? { ...lastUsage, ...json.usage } : { ...json.usage };
+      }
+      const ch = json.choices && json.choices[0];
+      if (!ch) return;
+      if (ch.finish_reason) finishReason = ch.finish_reason;
+      const d = ch.delta || ch.message || {};
+      if (typeof d.content === 'string') content += d.content;
+      const rPiece = st.thinking
+        ? (typeof d.reasoning_content === 'string' && d.reasoning_content) ||
+          (typeof d.reasoning === 'string' && d.reasoning) ||
+          (typeof d.thinking === 'string' && d.thinking) ||
+          ''
+        : '';
+      if (rPiece) reasoning += rPiece;
+      applyToolDelta(d.tool_calls);
+      render();
+    };
+
+    const drainBufferLines = () => {
+      for (;;) {
+        const nl = buffer.indexOf('\n');
+        if (nl < 0) break;
+        const line = buffer.slice(0, nl).trimEnd();
+        buffer = buffer.slice(nl + 1);
+        processSseLine(line);
+        if (doneSignal) break;
+      }
+    };
+
+    for (;;) {
+      if (signal && signal.aborted) {
+        cancelledUserStop = true;
+        try {
+          reader.cancel();
+        } catch (_) {}
+        break;
+      }
+      let chunk;
+      try {
+        chunk = await reader.read();
+      } catch (re) {
+        if (signal && (signal.aborted || isAbortLikeError(re))) {
+          cancelledUserStop = true;
+          break;
+        }
+        throw re;
+      }
+      const { done, value } = chunk;
+      if (value && value.length) buffer += dec.decode(value, { stream: !done });
+      if (done) {
+        buffer += dec.decode(new Uint8Array(), { stream: false });
+        buffer += '\n';
+        drainBufferLines();
+        break;
+      }
+      drainBufferLines();
+      if (doneSignal) break;
+    }
+
+    const fin = finishAssistantBubble(cancelledUserStop);
+    return {
+      assistantMsg: fin.assistantMsg,
+      finishReason: finishReason || 'stop',
+      hadReasoning: fin.hadReasoning,
+      usage: lastUsage,
+      cancelled: cancelledUserStop,
+    };
+  } catch (e) {
+    try {
+      reader && reader.cancel && reader.cancel();
+    } catch (_) {}
+    if (signal && (signal.aborted || isAbortLikeError(e))) {
+      const fin = finishAssistantBubble(true);
+      return {
+        assistantMsg: fin.assistantMsg,
+        finishReason: finishReason || 'stop',
+        hadReasoning: fin.hadReasoning,
+        usage: lastUsage,
+        cancelled: true,
+      };
+    }
+    if (wrap.parentNode) wrap.remove();
+    throw e;
+  }
+}
+
+async function runAgentLoop(userText) {
+  st.chatAbortController = new AbortController();
+  const signal = st.chatAbortController.signal;
+  st.conversationMessages.push({ role: 'user', content: userText });
+  const afterUserLen = st.conversationMessages.length;
+  updateContextBadge();
+  setChatBusy(true);
+  try {
+    mimiAgent: for (;;) {
+      if (signal.aborted) {
+        appendStoppedNotice();
+        break mimiAgent;
+      }
+      const apiMessages = buildApiMessages();
+      updateContextBadge();
+      let turn;
+      let streamFailed = false;
+      const maxEmptyRetries = 3;
+      let emptyRetries = 0;
+      for (;;) {
+        try {
+          if (signal.aborted) {
+            appendStoppedNotice();
+            streamFailed = true;
+            break;
+          }
+          turn = await streamAssistantIntoNewBubble(apiMessages, signal);
+        } catch (e) {
+          const msg = e && e.message ? e.message : String(e);
+          appendChatError(msg);
+          if (st.conversationMessages.length === afterUserLen) {
+            st.conversationMessages.pop();
+            const users = document.querySelectorAll('#messages-area .msg.user');
+            const lastU = users[users.length - 1];
+            if (lastU) lastU.remove();
+          }
+          updateContextBadge();
+          streamFailed = true;
+          break;
+        }
+        const emptyBody =
+          !turn.cancelled &&
+          isAssistantTurnEmptyReply(turn.assistantMsg) &&
+          !turn.hadReasoning;
+        if (emptyBody && emptyRetries < maxEmptyRetries) {
+          emptyRetries++;
+          removeLastAssistantMessageBubble();
+          appendToolTrace('— empty model reply, retrying —');
+          updateContextBadge();
+          continue;
+        }
+        break;
+      }
+      if (streamFailed) break;
+
+      st.conversationMessages.push(turn.assistantMsg);
+      commitTokenMeterFromUsage(turn.usage);
+      updateContextBadge();
+
+      if (turn.cancelled) {
+        break mimiAgent;
+      }
+
+      const tcs = turn.assistantMsg.tool_calls;
+      if (tcs && tcs.length) {
+        if (signal.aborted) {
+          const lm = st.conversationMessages[st.conversationMessages.length - 1];
+          if (lm && lm.role === 'assistant') {
+            delete lm.tool_calls;
+            if (lm.content == null || lm.content === '') lm.content = '';
+            const nodes = document.querySelectorAll('#messages-area .msg.ai:not(.chat-err-msg)');
+            const row = nodes.length ? nodes[nodes.length - 1] : null;
+            const b = row && row.querySelector('.bubble');
+            if (b) {
+              const t = String(lm.content || '').trim();
+              if (t) {
+                b.classList.add('md-content');
+                b.innerHTML =
+                  renderMarkdownSafe(t) +
+                  '<p class="gen-stopped-foot" role="note">Generation stopped before tools ran.</p>';
+                enhanceCodeBlocks(b);
+              } else {
+                b.classList.remove('md-content');
+                b.innerHTML =
+                  '<span class="ai-placeholder">(generation stopped before tools ran)</span>';
+              }
+            }
+          }
+          appendStoppedNotice();
+          break mimiAgent;
+        }
+        for (const tc of tcs) {
+          const name = tc.function && tc.function.name;
+          const rawArgs = (tc.function && tc.function.arguments) || '{}';
+          const meta = toolMetaByFunctionName(name);
+          const gate = classifyToolGate(meta, name);
+
+          let parsedArgs = {};
+          let argsParseError = '';
+          try {
+            const t = String(rawArgs || '').trim();
+            parsedArgs = t ? JSON.parse(t) : {};
+            if (parsedArgs == null || typeof parsedArgs !== 'object' || Array.isArray(parsedArgs)) {
+              parsedArgs = {};
+              argsParseError = 'Tool arguments must be a JSON object.';
+            }
+          } catch (e) {
+            parsedArgs = {};
+            argsParseError = `Could not parse tool arguments: ${String(e && e.message || e)}`;
+          }
+
+          if (gate === 'deny') {
+            const reason = meta
+              ? `Tool "${name}" is turned off in Settings → Tools.`
+              : `Unknown tool "${name}" (not in built-in list).`;
+            st.conversationMessages.push({
+              role: 'tool',
+              tool_call_id: tc.id,
+              content: formatToolErrorForModel(name, reason, 'permanent'),
+            });
+            appendToolCard({ kind: name, ...parsedArgs }, 'deny', reason);
+            continue;
+          }
+
+          if (argsParseError) {
+            st.conversationMessages.push({
+              role: 'tool',
+              tool_call_id: tc.id,
+              content: formatToolErrorForModel(name, argsParseError, 'retry'),
+            });
+            appendToolCard({ kind: name }, 'error', '', argsParseError);
+            continue;
+          }
+
+          const projectDir = st.projectDir || '';
+          const previewResp = await mimiApi.toolPreview(name, parsedArgs, projectDir);
+          if (!previewResp || previewResp.ok !== true) {
+            const errMsg = (previewResp && previewResp.error) || 'Tool preview failed.';
+            st.conversationMessages.push({
+              role: 'tool',
+              tool_call_id: tc.id,
+              content: formatToolErrorForModel(name, errMsg, 'retry'),
+            });
+            appendToolCard({ kind: name, ...parsedArgs }, 'error', '', errMsg);
+            continue;
+          }
+          const previewInfo = previewResp.preview || { kind: name };
+
+          if (gate === 'need_ask') {
+            if (signal.aborted) {
+              appendStoppedNotice();
+              break mimiAgent;
+            }
+            const perm = await requestToolPermission({
+              name,
+              desc: meta ? meta.desc : '',
+              info: previewInfo,
+            });
+            const approved = perm && perm.ok === true;
+            if (!approved) {
+              const dr = perm && String(perm.denyReason || '').trim();
+              const toolContent = dr
+                ? `User denied the tool call "${name}".\n\nReason:\n${dr}`
+                : `User denied the tool call "${name}" (no reason was given).`;
+              st.conversationMessages.push({
+                role: 'tool',
+                tool_call_id: tc.id,
+                content: toolContent,
+              });
+              appendToolCard(previewInfo, 'deny', dr || '');
+              continue;
+            }
+          }
+
+          const decision = gate === 'allow' ? 'allow-auto' : 'allow';
+
+          let renderInfo, modelResult;
+          if (READ_ONLY_TOOLS.has(name)) {
+            renderInfo = previewInfo;
+            modelResult = previewInfo;
+          } else {
+            const callResp = await mimiApi.toolCall(name, parsedArgs, projectDir);
+            if (!callResp || callResp.ok !== true) {
+              const errMsg = (callResp && callResp.error) || 'Tool call failed.';
+              st.conversationMessages.push({
+                role: 'tool',
+                tool_call_id: tc.id,
+                content: formatToolErrorForModel(name, errMsg, 'retry'),
+              });
+              appendToolCard(previewInfo, 'error', '', errMsg);
+              continue;
+            }
+            renderInfo = { ...(previewInfo || {}), ...(callResp.result || {}) };
+            if (!renderInfo.kind) renderInfo.kind = previewInfo.kind || name;
+            modelResult = callResp.result || {};
+          }
+
+          st.conversationMessages.push({
+            role: 'tool',
+            tool_call_id: tc.id,
+            content: JSON.stringify(modelResult),
+          });
+          appendToolCard(renderInfo, decision);
+        }
+        updateContextBadge();
+        continue;
+      }
+
+      break;
+    }
+  } finally {
+    st.chatAbortController = null;
+    setChatBusy(false);
+    updateContextBadge();
+    scrollMessagesAreaToBottom(false);
+    updateScrollBtn();
+    focusComposerIfChat();
+  }
+}
+
+// ─── IMAGE ATTACHMENTS (inline pills in the contenteditable composer) ─────
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+/** Currently-dragging pill (set on dragstart, cleared on dragend). Used by the editor's drop handler to relocate it. */
+let _draggedPill = null;
+let _dropCaretEl = null;
+/** True while an IME composition is in progress. handleKey/handleInput bail
+ *  while set so we don't normalize the DOM mid-composition (which corrupts
+ *  CJK and other multi-keystroke input). */
+let _composingActive = false;
+
+function rangeFromPoint(x, y) {
+  if (typeof document.caretRangeFromPoint === 'function') {
+    return document.caretRangeFromPoint(x, y);
+  }
+  if (typeof document.caretPositionFromPoint === 'function') {
+    const pos = document.caretPositionFromPoint(x, y);
+    if (pos) {
+      const r = document.createRange();
+      r.setStart(pos.offsetNode, pos.offset);
+      r.collapse(true);
+      return r;
+    }
+  }
+  return null;
+}
+
+/**
+ * Decide where a drop at (x,y) should land. Returns either a sibling-pill snap
+ * (so the dragged pill never gets inserted *inside* another pill's structure)
+ * or a plain caret range for text-position drops.
+ */
+function resolveDropPosition(x, y, draggedPill) {
+  const editor = getEditor();
+  if (!editor) return null;
+
+  const findPillAncestor = (node) => {
+    let n = node;
+    while (n && n !== editor) {
+      if (n.nodeType === Node.ELEMENT_NODE && n.classList && n.classList.contains('msg-img-pill')) {
+        return n;
+      }
+      n = n.parentNode;
+    }
+    return null;
+  };
+
+  // elementFromPoint reliably reports the pill itself (children have pointer-events: none).
+  const el = document.elementFromPoint(x, y);
+  let pill = null;
+  if (el && editor.contains(el)) {
+    pill = el.closest ? el.closest('.msg-img-pill') : null;
+  }
+  if (!pill) {
+    const range = rangeFromPoint(x, y);
+    if (!range || !editor.contains(range.startContainer)) return null;
+    const ancestor = findPillAncestor(range.startContainer);
+    if (ancestor) {
+      pill = ancestor;
+    } else {
+      return { kind: 'range', range };
+    }
+  }
+  if (pill === draggedPill) return null;
+  const r = pill.getBoundingClientRect();
+  const side = (x - r.left) < r.width / 2 ? 'before' : 'after';
+  return { kind: 'sibling', target: pill, side };
+}
+
+function showDropCaret(x, y) {
+  const editor = getEditor();
+  if (!editor) return null;
+  const pos = resolveDropPosition(x, y, _draggedPill);
+  if (!pos) {
+    hideDropCaret();
+    return null;
+  }
+  let rect;
+  if (pos.kind === 'sibling') {
+    const r = pos.target.getBoundingClientRect();
+    rect = { left: pos.side === 'before' ? r.left : r.right, top: r.top, width: 0, height: r.height };
+  } else {
+    rect = pos.range.getBoundingClientRect();
+    if (!rect || (rect.height === 0 && rect.width === 0)) {
+      // Collapsed ranges between nodes can have a zero rect. Fall back to the
+      // surrounding element's line box.
+      const host =
+        pos.range.startContainer.nodeType === Node.ELEMENT_NODE
+          ? pos.range.startContainer
+          : pos.range.startContainer.parentElement;
+      if (host) rect = host.getBoundingClientRect();
+    }
+  }
+  if (!rect) {
+    hideDropCaret();
+    return null;
+  }
+  if (!_dropCaretEl) {
+    _dropCaretEl = document.createElement('div');
+    _dropCaretEl.className = 'msg-img-pill-drop-caret';
+    document.body.appendChild(_dropCaretEl);
+  }
+  const editorStyle = window.getComputedStyle(editor);
+  const lineH = parseFloat(editorStyle.lineHeight) || 22;
+  const h = Math.max(rect.height || lineH, lineH * 0.9);
+  _dropCaretEl.style.display = 'block';
+  _dropCaretEl.style.left = `${rect.left}px`;
+  _dropCaretEl.style.top = `${rect.top}px`;
+  _dropCaretEl.style.height = `${h}px`;
+  return pos;
+}
+
+function hideDropCaret() {
+  if (_dropCaretEl) _dropCaretEl.style.display = 'none';
+}
+
+function getEditor() {
+  return document.getElementById('msg-input');
+}
+
+function formatImageBytes(n) {
+  const x = Math.max(0, Math.round(n || 0));
+  if (x < 1024) return x + ' B';
+  if (x < 1024 * 1024) return (x / 1024).toFixed(0) + ' KB';
+  return (x / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+function readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onerror = () => reject(fr.error || new Error('read failed'));
+    fr.onload = () => resolve(String(fr.result || ''));
+    fr.readAsDataURL(file);
+  });
+}
+
+/** Map of pill id → {dataUrl, mime, name, sizeBytes}. Used by the history serializer. */
+const _pillBlobs = new Map();
+let _pillIdSeq = 0;
+
+function buildImagePill(blob, existingId) {
+  const id = existingId != null ? existingId : ++_pillIdSeq;
+  if (!_pillBlobs.has(id)) _pillBlobs.set(id, blob);
+  const data = _pillBlobs.get(id);
+
+  const pill = document.createElement('span');
+  pill.className = 'msg-img-pill';
+  pill.contentEditable = 'false';
+  pill.draggable = true;
+  pill.title = `${data.name || 'image'} · ${formatImageBytes(data.sizeBytes)}`;
+  pill.dataset.pillId = String(id);
+  pill.dataset.mime = data.mime || '';
+  pill.dataset.name = data.name || 'image';
+
+  const thumb = document.createElement('img');
+  thumb.className = 'msg-img-pill-thumb';
+  thumb.src = data.dataUrl;
+  thumb.alt = '';
+  pill.appendChild(thumb);
+
+  const label = document.createElement('span');
+  label.className = 'msg-img-pill-name';
+  label.textContent = data.name || 'image';
+  pill.appendChild(label);
+
+  const rm = document.createElement('button');
+  rm.type = 'button';
+  rm.className = 'msg-img-pill-rm';
+  rm.title = 'Remove';
+  rm.setAttribute('aria-label', `Remove ${data.name || 'image'}`);
+  rm.textContent = '×';
+  pill.appendChild(rm);
+
+  bindPillHandlers(pill);
+  return pill;
+}
+
+function bindPillHandlers(pill) {
+  if (pill.__mimiBound) return;
+  pill.__mimiBound = true;
+
+  const rm = pill.querySelector('.msg-img-pill-rm');
+  if (rm) {
+    rm.addEventListener('mousedown', (e) => e.preventDefault());
+    rm.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      pill.remove();
+      commitHistory();
+      updateEditorEmpty();
+      updateContextBadge();
+    });
+  }
+
+  pill.addEventListener('dragstart', (e) => {
+    _draggedPill = pill;
+    pill.classList.add('is-dragging');
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move';
+      try { e.dataTransfer.setData('application/x-mimi-pill', '1'); } catch {}
+    }
+  });
+  pill.addEventListener('dragend', () => {
+    pill.classList.remove('is-dragging');
+    _draggedPill = null;
+    hideDropCaret();
+    updateEditorEmpty();
+    updateContextBadge();
+  });
+}
+
+function insertNodeAtSelection(node) {
+  const editor = getEditor();
+  if (!editor) return;
+  editor.focus({ preventScroll: true });
+  const sel = window.getSelection();
+  let range;
+  if (sel && sel.rangeCount && editor.contains(sel.anchorNode)) {
+    range = sel.getRangeAt(0);
+    range.deleteContents();
+  } else {
+    range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+  }
+  range.insertNode(node);
+  // Place caret after the inserted node.
+  range.setStartAfter(node);
+  range.collapse(true);
+  if (sel) {
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+}
+
+function insertNodeAtPoint(node, clientX, clientY) {
+  const editor = getEditor();
+  if (!editor) return;
+  // If the cursor is over an existing pill, snap before/after it at editor
+  // level. Otherwise caretRangeFromPoint can resolve to a text node inside
+  // the pill (e.g. its label), and Range.insertNode would nest the new pill
+  // inside the existing one — which the serializer treats as a single image.
+  const overEl = document.elementFromPoint(clientX, clientY);
+  const overPill =
+    overEl && editor.contains(overEl) && overEl.closest
+      ? overEl.closest('.msg-img-pill')
+      : null;
+  if (overPill && overPill.parentNode === editor) {
+    const r = overPill.getBoundingClientRect();
+    const before = clientX - r.left < r.width / 2;
+    if (before) editor.insertBefore(node, overPill);
+    else editor.insertBefore(node, overPill.nextSibling);
+    const sel = window.getSelection();
+    const after = document.createRange();
+    after.setStartAfter(node);
+    after.collapse(true);
+    if (sel) {
+      sel.removeAllRanges();
+      sel.addRange(after);
+    }
+    return;
+  }
+  let range = null;
+  if (typeof document.caretRangeFromPoint === 'function') {
+    range = document.caretRangeFromPoint(clientX, clientY);
+  } else if (typeof document.caretPositionFromPoint === 'function') {
+    const pos = document.caretPositionFromPoint(clientX, clientY);
+    if (pos) {
+      range = document.createRange();
+      range.setStart(pos.offsetNode, pos.offset);
+      range.collapse(true);
+    }
+  }
+  if (!range || !editor.contains(range.startContainer)) {
+    insertNodeAtSelection(node);
+    return;
+  }
+  // Caret may still resolve inside a pill's descendants (text in the label,
+  // for instance). Promote to an editor-level sibling drop in that case.
+  let pillAncestor = null;
+  for (let n = range.startContainer; n && n !== editor; n = n.parentNode) {
+    if (
+      n.nodeType === Node.ELEMENT_NODE &&
+      n.classList &&
+      n.classList.contains('msg-img-pill')
+    ) {
+      pillAncestor = n;
+      break;
+    }
+  }
+  if (pillAncestor && pillAncestor.parentNode === editor) {
+    const r = pillAncestor.getBoundingClientRect();
+    const before = clientX - r.left < r.width / 2;
+    if (before) editor.insertBefore(node, pillAncestor);
+    else editor.insertBefore(node, pillAncestor.nextSibling);
+  } else {
+    range.insertNode(node);
+  }
+  const sel = window.getSelection();
+  const after = document.createRange();
+  after.setStartAfter(node);
+  after.collapse(true);
+  if (sel) {
+    sel.removeAllRanges();
+    sel.addRange(after);
+  }
+}
+
+async function readFilesAsImages(files) {
+  const out = [];
+  for (const file of Array.from(files || [])) {
+    if (!file || !file.type || !file.type.startsWith('image/')) continue;
+    if (file.size > MAX_IMAGE_BYTES) {
+      alert(`"${file.name}" is too large (>${(MAX_IMAGE_BYTES / 1024 / 1024) | 0} MB).`);
+      continue;
+    }
+    try {
+      const dataUrl = await readFileAsDataURL(file);
+      out.push({ dataUrl, mime: file.type, name: file.name || 'image', sizeBytes: file.size || 0 });
+    } catch (e) {
+      alert(`Could not read "${file.name}": ${e && e.message ? e.message : e}`);
+    }
+  }
+  return out;
+}
+
+async function addImageFiles(files, opts) {
+  const ims = await readFilesAsImages(files);
+  if (!ims.length) return;
+  if (opts && typeof opts.clientX === 'number' && typeof opts.clientY === 'number') {
+    for (const im of ims) insertNodeAtPoint(buildImagePill(im), opts.clientX, opts.clientY);
+  } else {
+    for (const im of ims) insertNodeAtSelection(buildImagePill(im));
+  }
+  commitHistory();
+  updateEditorEmpty();
+  updateContextBadge();
+}
+
+async function handlePaste(event) {
+  const cd = event.clipboardData;
+  if (!cd) return;
+  const items = Array.from(cd.items || []);
+  const imageFiles = [];
+  for (const it of items) {
+    if (it.kind === 'file' && it.type && it.type.startsWith('image/')) {
+      const f = it.getAsFile();
+      if (f) imageFiles.push(f);
+    }
+  }
+  if (imageFiles.length) {
+    event.preventDefault();
+    await addImageFiles(imageFiles);
+    return;
+  }
+  // Plain-text paste: strip rich HTML so we never carry colors / images / fonts in.
+  // Split on newlines and route through our own line-split path so each pasted
+  // line becomes a real <div>, not a <br> (which our normalizer strips). Going
+  // through insertLineBreakAtCaret keeps the editor's structural invariant
+  // intact regardless of what was on the clipboard.
+  const text = cd.getData('text/plain');
+  if (typeof text === 'string') {
+    event.preventDefault();
+    insertPlainTextAtCaret(text);
+    commitHistory();
+  }
+}
+
+function insertTextSegmentAtCaret(text) {
+  if (!text) return;
+  const editor = getEditor();
+  const sel = window.getSelection();
+  if (!editor || !sel || !sel.rangeCount) return;
+  const range = sel.getRangeAt(0);
+  if (!editor.contains(range.startContainer)) return;
+  range.deleteContents();
+  const tn = document.createTextNode(text);
+  range.insertNode(tn);
+  range.setStartAfter(tn);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+function insertPlainTextAtCaret(text) {
+  // Normalize Windows / classic-Mac line endings to \n.
+  const normalized = String(text).replace(/\r\n?/g, '\n');
+  const lines = normalized.split('\n');
+  insertTextSegmentAtCaret(lines[0]);
+  for (let i = 1; i < lines.length; i++) {
+    insertLineBreakAtCaret();
+    insertTextSegmentAtCaret(lines[i]);
+  }
+  normalizeEditorLines();
+  updateEditorEmpty();
+}
+
+function initImageEditor() {
+  // Prevent the browser from navigating to a dropped image if the user misses the drop zone.
+  const isFileDrag = (e) =>
+    !!e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+  window.addEventListener('dragover', (e) => { if (isFileDrag(e)) e.preventDefault(); });
+  window.addEventListener('drop',     (e) => { if (isFileDrag(e)) e.preventDefault(); });
+
+  const box = document.querySelector('#screen-chat .input-box');
+  const editor = getEditor();
+  if (!box || !editor) return;
+
+  let depth = 0;
+  box.addEventListener('dragenter', (e) => {
+    if (!isFileDrag(e) || st.chatInFlight) return;
+    e.preventDefault();
+    depth++;
+    box.classList.add('drag-over');
+  });
+  box.addEventListener('dragover', (e) => {
+    if (!isFileDrag(e) || st.chatInFlight) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  });
+  box.addEventListener('dragleave', (e) => {
+    if (!isFileDrag(e)) return;
+    depth = Math.max(0, depth - 1);
+    if (depth === 0) box.classList.remove('drag-over');
+  });
+  box.addEventListener('drop', async (e) => {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    depth = 0;
+    box.classList.remove('drag-over');
+    if (st.chatInFlight) return;
+    const files = Array.from(e.dataTransfer.files || []).filter(
+      (f) => f && f.type && f.type.startsWith('image/'),
+    );
+    if (!files.length) return;
+    await addImageFiles(files, { clientX: e.clientX, clientY: e.clientY });
+  });
+
+  // Keep placeholder state in sync with selection / focus changes too.
+  editor.addEventListener('blur',  updateEditorEmpty);
+  editor.addEventListener('focus', updateEditorEmpty);
+
+  // IME composition: suspend our key/input handling so the in-progress
+  // composition isn't disturbed. Resync once it ends.
+  editor.addEventListener('compositionstart', () => { _composingActive = true; });
+  editor.addEventListener('compositionend', () => {
+    _composingActive = false;
+    handleInput();
+  });
+
+  // Internal pill drag: handle the move ourselves — Chromium's native reorder
+  // inside contenteditable is unreliable, and on contenteditable=false targets
+  // it has been observed to nest the dragged pill *inside* the target pill.
+  // The serializer does not recurse into pills, so a nested pill is invisible
+  // to the model — matching the "AI only sees one image" symptom. We always
+  // preventDefault for our own pill drags to suppress the native fallback.
+  const isPillDrag = (e) =>
+    !!_draggedPill ||
+    (e.dataTransfer &&
+      Array.from(e.dataTransfer.types || []).includes('application/x-mimi-pill'));
+  editor.addEventListener('dragover', (e) => {
+    if (!isPillDrag(e)) return;
+    e.preventDefault();
+    if (!_draggedPill) return;
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    showDropCaret(e.clientX, e.clientY);
+  });
+  editor.addEventListener('dragleave', (e) => {
+    if (!_draggedPill) return;
+    // Only hide when the pointer truly leaves the editor (not merely entering a child).
+    const rt = e.relatedTarget;
+    if (!rt || !editor.contains(rt)) hideDropCaret();
+  });
+  editor.addEventListener('drop', (e) => {
+    if (!isPillDrag(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    hideDropCaret();
+    const pill = _draggedPill;
+    if (!pill) return;
+
+    const pos = resolveDropPosition(e.clientX, e.clientY, pill);
+    if (pos && pos.kind === 'sibling') {
+      // Snap before/after the target pill — never *inside* its DOM, which
+      // caretRangeFromPoint would otherwise allow when the pointer lands on
+      // the target's thumb or label. Walk up to the target's editor-level
+      // ancestor in case it's been wrapped (e.g. by a prior bad drop).
+      let anchor = pos.target;
+      while (anchor && anchor.parentNode && anchor.parentNode !== editor) {
+        anchor = anchor.parentNode;
+      }
+      if (anchor && anchor.parentNode === editor) {
+        if (pos.side === 'before') editor.insertBefore(pill, anchor);
+        else editor.insertBefore(pill, anchor.nextSibling);
+      }
+    } else if (pos && pos.kind === 'range') {
+      // Per DOM spec, Range.insertNode() splits the start text node at the
+      // offset (if needed) and inserts the node at that boundary. Since the
+      // pill is already in the DOM, it's auto-detached from its old position
+      // and reinserted — no marker dance needed.
+      pos.range.insertNode(pill);
+    } else {
+      // Drop point unresolvable (or on the dragged pill itself) — leave the
+      // pill where it was rather than nudging it to the end.
+    }
+
+    // Sanity: a pill must never live inside another pill. If anything ended up
+    // nested (from a prior bug, native fallback, or Range.insertNode on an
+    // unexpected boundary), promote nested pills back to editor level so the
+    // serializer can see them.
+    const nested = editor.querySelectorAll('.msg-img-pill .msg-img-pill');
+    for (const n of nested) {
+      const outer = n.parentElement && n.parentElement.closest('.msg-img-pill');
+      if (outer && outer.parentNode) outer.parentNode.insertBefore(n, outer.nextSibling);
+    }
+
+    const sel = window.getSelection();
+    const after = document.createRange();
+    after.setStartAfter(pill);
+    after.collapse(true);
+    if (sel) {
+      sel.removeAllRanges();
+      sel.addRange(after);
+    }
+    commitHistory();
+    updateEditorEmpty();
+    updateContextBadge();
+  });
+}
+
+function isEditorEffectivelyEmpty() {
+  const editor = getEditor();
+  if (!editor) return true;
+  if (editor.querySelector('.msg-img-pill')) return false;
+  return editor.textContent.replace(/\u200B/g, '').length === 0;
+}
+
+function updateEditorEmpty() {
+  const editor = getEditor();
+  if (!editor) return;
+  const empty = isEditorEffectivelyEmpty();
+  editor.classList.toggle('is-empty', empty);
+  // Word-deletion (alt+backspace) and similar can leave behind invisible inline
+  // nodes (empty <span>, stray <br>) where the caret then lands — visually
+  // placing it after the placeholder text. Reset to a clean state when empty.
+  if (empty && editor.firstChild) {
+    editor.innerHTML = '';
+    if (document.activeElement === editor) {
+      const sel = window.getSelection();
+      if (sel) {
+        const r = document.createRange();
+        r.setStart(editor, 0);
+        r.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(r);
+      }
+    }
+  }
+}
+
+function clearEditor() {
+  const editor = getEditor();
+  if (!editor) return;
+  editor.innerHTML = '';
+  resetHistory();
+  updateEditorEmpty();
+}
+
+function setEditorText(text) {
+  const editor = getEditor();
+  if (!editor) return;
+  editor.innerHTML = '';
+  editor.appendChild(document.createTextNode(text));
+  // Caret to end.
+  editor.focus({ preventScroll: true });
+  const sel = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(editor);
+  range.collapse(false);
+  if (sel) {
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+  resetHistory();
+  updateEditorEmpty();
+}
+
+// ─── EDITOR HISTORY (custom undo/redo for typing + pill ops) ───────────────
+const HISTORY_MAX = 100;
+const _edHist = { undo: [], redo: [], baseline: null, typingTimer: 0 };
+
+function _pathTo(root, node) {
+  const path = [];
+  while (node && node !== root) {
+    const parent = node.parentNode;
+    if (!parent) return null;
+    path.unshift(Array.from(parent.childNodes).indexOf(node));
+    node = parent;
+  }
+  return node === root ? path : null;
+}
+
+function _nodeAtPath(root, path) {
+  if (!path) return null;
+  let n = root;
+  for (const i of path) {
+    if (!n.childNodes || !n.childNodes[i]) return null;
+    n = n.childNodes[i];
+  }
+  return n;
+}
+
+function _saveSelectionFor(editor) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return null;
+  const r = sel.getRangeAt(0);
+  if (!editor.contains(r.startContainer)) return null;
+  const sp = _pathTo(editor, r.startContainer);
+  const ep = _pathTo(editor, r.endContainer);
+  if (!sp || !ep) return null;
+  return { sp, so: r.startOffset, ep, eo: r.endOffset };
+}
+
+function _restoreSelectionTo(editor, snap) {
+  const sel = window.getSelection();
+  const fallback = () => {
+    if (!sel) return;
+    const r = document.createRange();
+    r.selectNodeContents(editor);
+    r.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(r);
+  };
+  if (!snap) return fallback();
+  const start = _nodeAtPath(editor, snap.sp);
+  const end = _nodeAtPath(editor, snap.ep);
+  if (!start || !end) return fallback();
+  const sLen = start.nodeType === Node.TEXT_NODE ? start.length : start.childNodes.length;
+  const eLen = end.nodeType === Node.TEXT_NODE ? end.length : end.childNodes.length;
+  try {
+    const r = document.createRange();
+    r.setStart(start, Math.min(snap.so, sLen));
+    r.setEnd(end, Math.min(snap.eo, eLen));
+    if (sel) {
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+  } catch {
+    fallback();
+  }
+}
+
+function _captureItems() {
+  const editor = getEditor();
+  if (!editor) return [];
+  const items = [];
+  const walk = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      items.push({ k: 't', v: node.nodeValue });
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    if (node.classList && node.classList.contains('msg-img-pill')) {
+      items.push({ k: 'p', id: parseInt(node.dataset.pillId, 10) });
+      return;
+    }
+    if (node.tagName === 'BR') {
+      items.push({ k: 'br' });
+      return;
+    }
+    for (const c of node.childNodes) walk(c);
+  };
+  for (const c of editor.childNodes) walk(c);
+  return items;
+}
+
+function _itemsEqual(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].k !== b[i].k) return false;
+    if (a[i].k === 't' && a[i].v !== b[i].v) return false;
+    if (a[i].k === 'p' && a[i].id !== b[i].id) return false;
+  }
+  return true;
+}
+
+function captureEditorState() {
+  const editor = getEditor();
+  if (!editor) return null;
+  return { items: _captureItems(), sel: _saveSelectionFor(editor) };
+}
+
+function applyEditorState(state) {
+  const editor = getEditor();
+  if (!editor || !state) return;
+  editor.innerHTML = '';
+  for (const it of state.items) {
+    if (it.k === 't') editor.appendChild(document.createTextNode(it.v));
+    else if (it.k === 'br') editor.appendChild(document.createElement('br'));
+    else if (it.k === 'p') {
+      const blob = _pillBlobs.get(it.id);
+      if (!blob) continue;
+      editor.appendChild(buildImagePill(blob, it.id));
+    }
+  }
+  editor.focus({ preventScroll: true });
+  _restoreSelectionTo(editor, state.sel);
+  updateEditorEmpty();
+  updateContextBadge();
+}
+
+function _flushTypingTimer() {
+  if (_edHist.typingTimer) {
+    clearTimeout(_edHist.typingTimer);
+    _edHist.typingTimer = 0;
+  }
+}
+
+function commitHistory() {
+  const cur = captureEditorState();
+  if (!cur) return;
+  if (_edHist.baseline && _itemsEqual(_edHist.baseline.items, cur.items)) {
+    _edHist.baseline = cur;
+    return;
+  }
+  if (_edHist.baseline) {
+    _edHist.undo.push(_edHist.baseline);
+    if (_edHist.undo.length > HISTORY_MAX) _edHist.undo.shift();
+  }
+  _edHist.baseline = cur;
+  _edHist.redo = [];
+}
+
+function scheduleTypingCommit() {
+  _flushTypingTimer();
+  _edHist.typingTimer = setTimeout(() => {
+    _edHist.typingTimer = 0;
+    commitHistory();
+  }, 400);
+}
+
+function performUndo() {
+  _flushTypingTimer();
+  // If typing changed the editor since baseline, snapshot that as its own undo step first.
+  const cur = captureEditorState();
+  if (cur && _edHist.baseline && !_itemsEqual(_edHist.baseline.items, cur.items)) {
+    _edHist.undo.push(_edHist.baseline);
+    if (_edHist.undo.length > HISTORY_MAX) _edHist.undo.shift();
+    _edHist.baseline = cur;
+    _edHist.redo = [];
+  }
+  if (!_edHist.undo.length) return;
+  if (_edHist.baseline) _edHist.redo.push(_edHist.baseline);
+  const prev = _edHist.undo.pop();
+  applyEditorState(prev);
+  _edHist.baseline = prev;
+}
+
+function performRedo() {
+  _flushTypingTimer();
+  if (!_edHist.redo.length) return;
+  if (_edHist.baseline) _edHist.undo.push(_edHist.baseline);
+  const next = _edHist.redo.pop();
+  applyEditorState(next);
+  _edHist.baseline = next;
+}
+
+function resetHistory() {
+  _flushTypingTimer();
+  _edHist.undo = [];
+  _edHist.redo = [];
+  _edHist.baseline = captureEditorState();
+}
+
+function initEditorHistory() {
+  resetHistory();
+}
+
+/**
+ * Walk the editor in document order, collapsing adjacent text/whitespace into
+ * `text` parts and emitting `image_url` parts for each pill encountered.
+ * @returns {{text: string, content: string | Array<object>}}
+ */
+function readEditorContent() {
+  const editor = getEditor();
+  const parts = [];
+  let buf = '';
+  const flush = () => {
+    if (buf) {
+      parts.push({ type: 'text', text: buf });
+      buf = '';
+    }
+  };
+  if (!editor) return { text: '', content: '' };
+
+  const walk = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      // Strip stray ZWSPs (defensive — may show up via paste / older editor states).
+      buf += (node.nodeValue || '').replace(/\u200b/g, '');
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const el = /** @type {HTMLElement} */ (node);
+    if (el.classList && el.classList.contains('msg-img-pill')) {
+      flush();
+      const pillId = Number(el.dataset.pillId);
+      const blob = Number.isFinite(pillId) ? _pillBlobs.get(pillId) : null;
+      const url = (blob && blob.dataUrl) || '';
+      if (url) {
+        parts.push({
+          type: 'image_url',
+          image_url: { url },
+          _name: el.dataset.name || (blob && blob.name) || '',
+        });
+      } else {
+        console.warn('Dropping image pill with no associated data URL:', el.dataset.pillId);
+      }
+      return;
+    }
+    if (el.tagName === 'BR') {
+      buf += '\n';
+      return;
+    }
+    // Block-level descendants from paste / Enter inside contenteditable: insert newline boundary.
+    const block = ['DIV', 'P', 'LI'].includes(el.tagName);
+    if (block && buf && !buf.endsWith('\n')) buf += '\n';
+    for (const child of el.childNodes) walk(child);
+    if (block && buf && !buf.endsWith('\n')) buf += '\n';
+  };
+  for (const child of editor.childNodes) walk(child);
+  flush();
+
+  // Trim incidental leading/trailing whitespace introduced by the wrapper logic.
+  const cleaned = parts.filter((p) => p.type !== 'text' || p.text.trim().length > 0 || /[\n]/.test(p.text));
+  for (const p of cleaned) {
+    if (p.type === 'text') p.text = p.text.replace(/^\n+|\n+$/g, '');
+  }
+
+  const hasImage = cleaned.some((p) => p.type === 'image_url');
+  const text = cleaned
+    .filter((p) => p.type === 'text')
+    .map((p) => p.text)
+    .join('')
+    .trim();
+
+  if (!hasImage) return { text, content: text };
+  // Strip the helper _name field before sending.
+  const content = cleaned
+    .filter((p) => p.type !== 'text' || p.text.length > 0)
+    .map((p) => (p.type === 'image_url' ? { type: 'image_url', image_url: p.image_url } : p));
+  return { text, content };
+}
+
+function renderUserBubble(content) {
+  const div = document.createElement('div');
+  div.className = 'msg user';
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+
+  const parts = Array.isArray(content)
+    ? content
+    : [{ type: 'text', text: String(content || '') }];
+
+  for (const p of parts) {
+    if (!p || !p.type) continue;
+    if (p.type === 'text') {
+      const t = (p.text || '').toString();
+      if (!t) continue;
+      const wrap = document.createElement('div');
+      wrap.className = 'md-content';
+      wrap.innerHTML = renderMarkdownSafe(t);
+      enhanceCodeBlocks(wrap);
+      bubble.appendChild(wrap);
+    } else if (p.type === 'image_url' && p.image_url && p.image_url.url) {
+      const img = document.createElement('img');
+      img.className = 'user-img';
+      img.src = p.image_url.url;
+      img.alt = '';
+      bubble.appendChild(img);
+    }
+  }
+  div.appendChild(bubble);
+  return div;
+}
+
+async function sendMessage() {
+  if (st.chatInFlight) return;
+  const { text, content } = readEditorContent();
+  const val = text.trim();
+  if (val === '/clear')    { clearEditor(); executeClear();        return; }
+  if (val === '/think')    { clearEditor(); toggleThink();         return; }
+  if (val === '/autoedit') { clearEditor(); toggleAutoAcceptEdits(); return; }
+  if (val === '/model')    { clearEditor(); openModelPicker();     return; }
+  if (val === '/system')   { clearEditor(); openPromptPicker();    return; }
+  if (val === '/save')     { clearEditor(); executeSave();         return; }
+
+  const isArr = Array.isArray(content);
+  const hasImages = isArr && content.some((p) => p && p.type === 'image_url');
+  if (!val && !hasImages) return;
+
+  const area = document.getElementById('messages-area');
+  const div = renderUserBubble(content);
+  area.appendChild(div);
+  scrollMessageToTop(div);
+  clearEditor();
+  closeSlash();
+  if (st.pickerOpen) closeModelPicker();
+  if (st.promptPickerOpen) closePromptPicker();
+
+  await runAgentLoop(content);
+}
+
+/** Walk back from `wrap` and return the immediately preceding tool-card-wrap
+ *  in the same tool-call batch. Returns null if there's a non-tool-card
+ *  element (e.g. an assistant message) before any tool card. */
+function findLastPrecedingToolCard(wrap) {
+  let prev = wrap.previousElementSibling;
+  while (prev) {
+    if (prev.classList.contains('tool-card-wrap')) return prev;
+    if (prev.classList.contains('msg')) return null;
+    prev = prev.previousElementSibling;
+  }
+  return null;
+}
+
+function scrollMessageToTop(msgEl, opts) {
+  if (!msgEl) return;
+  const area = document.getElementById('messages-area');
+  if (!area) return;
+  const smooth = !!(opts && opts.smooth);
+
+  // Anchor `msgEl` at the top of the viewport for the rest of the turn
+  // instead of chasing the bottom as the assistant streams. The element stays
+  // put while later content grows below it, so there's no end-of-stream jump
+  // once rendering settles.
+  st.chatStickToBottom = false;
+
+  // Reserve enough runway below the content that `msgEl` can reach the top
+  // of the visible area even if what follows ends up short.
+  const dock = document.getElementById('chat-dock');
+  const dockH = dock ? Math.ceil(dock.getBoundingClientRect().height) : 160;
+  area.style.paddingBottom = Math.max(dockH + 32, area.clientHeight) + 'px';
+
+  requestAnimationFrame(() => {
+    const areaRect = area.getBoundingClientRect();
+    const elRect = msgEl.getBoundingClientRect();
+    const target = Math.max(0, area.scrollTop + (elRect.top - areaRect.top) - 8);
+    const max = Math.max(0, area.scrollHeight - area.clientHeight);
+    const top = Math.min(target, max);
+    if (smooth) {
+      area.scrollTo({ top, behavior: 'smooth' });
+    } else {
+      area.scrollTop = top;
+    }
+    updateScrollBtn();
+  });
+}
+
+/** Smooth-scroll `el` into view if it isn't fully visible. Used while tool
+ *  cards stream in so the user can see each one as it lands without it
+ *  hiding above or below the viewport edge. */
+function ensureChatElementVisible(el) {
+  const area = document.getElementById('messages-area');
+  if (!area || !el) return;
+  const dock = document.getElementById('chat-dock');
+  const dockH = dock ? Math.ceil(dock.getBoundingClientRect().height) : 160;
+  area.style.paddingBottom = Math.max(dockH + 32, area.clientHeight) + 'px';
+  requestAnimationFrame(() => {
+    const r = area.getBoundingClientRect();
+    const e = el.getBoundingClientRect();
+    if (e.top >= r.top && e.bottom <= r.bottom) return;
+    let delta = 0;
+    if (e.bottom > r.bottom) delta = e.bottom - r.bottom + 8;
+    else if (e.top < r.top) delta = e.top - r.top - 8;
+    if (!delta) return;
+    const max = Math.max(0, area.scrollHeight - area.clientHeight);
+    const top = Math.max(0, Math.min(area.scrollTop + delta, max));
+    area.scrollTo({ top, behavior: 'smooth' });
+    updateScrollBtn();
+  });
+}
+
+// ─── SCROLL-TO-BOTTOM BUTTON ───────────────
+function getLastUserMessage() {
+  const msgs = document.querySelectorAll('#messages-area .msg.user');
+  return msgs.length ? msgs[msgs.length - 1] : null;
+}
+
+function getStickyHeaderHeight() {
+  const hdr = document.querySelector('#screen-chat .hdr');
+  return hdr ? hdr.getBoundingClientRect().height : 0;
+}
+
+function messagesAreaScrolls() {
+  return getChatTranscriptScrollMetrics().internal;
+}
+
+function getLastUserTargetScroll() {
+  const lastUser = getLastUserMessage();
+  if (!lastUser) return null;
+  const area = document.getElementById('messages-area');
+  if (messagesAreaScrolls() && area) {
+    const areaRect = area.getBoundingClientRect();
+    const lastTop = lastUser.getBoundingClientRect().top;
+    return Math.max(0, area.scrollTop + (lastTop - areaRect.top) - 8);
+  }
+  const scroller = document.scrollingElement || document.documentElement;
+  const lastUserTopPage = lastUser.getBoundingClientRect().top + scroller.scrollTop;
+  return Math.max(0, lastUserTopPage - getStickyHeaderHeight() - 8);
+}
+
+function onScrollBtnClick() {
+  const area = document.getElementById('messages-area');
+  const target = getLastUserTargetScroll();
+
+  if (target === null) {
+    if (messagesAreaScrolls() && area) {
+      scrollMessagesAreaToBottom(true);
+    } else {
+      const scroller = document.scrollingElement || document.documentElement;
+      scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
+    }
+    return;
+  }
+
+  if (messagesAreaScrolls() && area) {
+    if (area.scrollTop < target - 4) {
+      area.scrollTo({ top: target, behavior: 'smooth' });
+    } else {
+      const dock = document.getElementById('chat-dock');
+      const dockH = dock ? Math.ceil(dock.getBoundingClientRect().height) : 160;
+      area.style.paddingBottom = Math.max(120, dockH + 32) + 'px';
+      requestAnimationFrame(() => {
+        scrollMessagesAreaToBottom(true);
+      });
+    }
+    return;
+  }
+
+  const scroller = document.scrollingElement || document.documentElement;
+  if (scroller.scrollTop < target - 4) {
+    scroller.scrollTo({ top: target, behavior: 'smooth' });
+  } else {
+    if (area) {
+      const dock = document.getElementById('chat-dock');
+      const dockH = dock ? Math.ceil(dock.getBoundingClientRect().height) : 160;
+      area.style.paddingBottom = Math.max(120, dockH + 32) + 'px';
+    }
+    requestAnimationFrame(() => {
+      if (area && messagesAreaScrolls()) {
+        scrollMessagesAreaToBottom(true);
+      } else {
+        scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
+      }
+    });
+  }
+}
+
+function updateScrollBtn() {
+  const btn = document.getElementById('scroll-btn');
+  if (!btn) return;
+  const chatScreen = document.getElementById('screen-chat');
+  if (!chatScreen || !chatScreen.classList.contains('active')) {
+    btn.classList.remove('show');
+    return;
+  }
+  const m = getChatTranscriptScrollMetrics();
+  if (!m.area) {
+    btn.classList.remove('show');
+    return;
+  }
+  const nearBottom = m.distFromBottom <= CHAT_STICK_BOTTOM_PX;
+  if (!nearBottom) st.chatStickToBottom = false;
+  else st.chatStickToBottom = true;
+  if (m.distFromBottom > 24) btn.classList.add('show');
+  else btn.classList.remove('show');
+}
+
+window.addEventListener('scroll', updateScrollBtn, { passive: true });
+window.addEventListener('resize', () => {
+  updateScrollBtn();
+  const chat = document.getElementById('screen-chat');
+  if (chat && chat.classList.contains('active') && st.chatStickToBottom) scrollMessagesAreaToBottom(false);
+});
+(function bindMessagesAreaScrollBtn() {
+  const area = document.getElementById('messages-area');
+  if (area) area.addEventListener('scroll', updateScrollBtn, { passive: true });
+})();
+
+function toggleThink() {
+  st.thinking = !st.thinking;
+  const btn = document.getElementById('think-badge');
+  btn.classList.toggle('on', st.thinking);
+  btn.textContent = '◈ thinking';
+  // show brief feedback in messages if in chat
+  if (document.getElementById('screen-chat').classList.contains('active')) {
+    const area = document.getElementById('messages-area');
+    const div = document.createElement('div');
+    div.className = 'sys-msg';
+    div.textContent = `— thinking ${st.thinking ? 'enabled' : 'disabled'} —`;
+    area.appendChild(div);
+    scrollMessagesAreaToBottom(false);
+  }
+  persistConfigSoon();
+}
+
+function syncAutoAcceptBadge() {
+  const btn = document.getElementById('auto-edit-badge');
+  if (!btn) return;
+  btn.classList.toggle('on', st.autoAcceptEdits);
+  btn.textContent = '✎ Accept Edits';
+}
+
+function toggleAutoAcceptEdits() {
+  st.autoAcceptEdits = !st.autoAcceptEdits;
+  syncAutoAcceptBadge();
+  if (document.getElementById('screen-chat').classList.contains('active')) {
+    const area = document.getElementById('messages-area');
+    const div = document.createElement('div');
+    div.className = 'sys-msg';
+    div.textContent = `— auto-accept tool calls ${st.autoAcceptEdits ? 'on' : 'off'} —`;
+    area.appendChild(div);
+    scrollMessagesAreaToBottom(false);
+  }
+  persistConfigSoon();
+}
+
+// ─── MODEL PICKER ──────────────────────────
+function renderPickerList() {
+  const listEl = document.getElementById('picker-list');
+  const all = st.availableModels;
+  if (!all.length) {
+    st.pickerIdx = 0;
+    listEl.innerHTML =
+      '<div class="picker-empty">No models — go back to setup or click <strong>↻ Refresh</strong> above.</div>';
+    return;
+  }
+  const models = getFilteredModelsForPicker();
+  if (!models.length) {
+    st.pickerIdx = 0;
+    listEl.innerHTML =
+      '<div class="picker-empty">No models match your search. Clear the search box to see all ' +
+      all.length +
+      ' model(s).</div>';
+    return;
+  }
+  st.pickerIdx = Math.max(0, models.findIndex((m) => m.id === st.model));
+  listEl.innerHTML = models
+    .map(
+      (m, i) => `
+    <div class="picker-item${m.id === st.model ? ' cur' : ''}${i === st.pickerIdx ? ' hi' : ''}" data-model="${esc(m.id)}" onclick="selectPickerModel('${esc(m.id)}')">
+      <div class="picker-dot"></div>
+      <span>${esc(m.id)}</span>
+      <span class="picker-meta">${esc(m.meta)}</span>
+    </div>`
+    )
+    .join('');
+}
+
+function highlightPicker() {
+  document.querySelectorAll('#picker-list .picker-item').forEach((it,i) => {
+    const on = i===st.pickerIdx;
+    it.classList.toggle('hi', on);
+    if (on) it.scrollIntoView({block: 'nearest'});
+  });
+}
+
+function openModelPicker() {
+  closeSlash();
+  if (st.promptPickerOpen) closePromptPicker();
+  const ps = document.getElementById('model-search-picker');
+  if (ps) ps.value = '';
+  st.pickerIdx = 0;
+  renderPickerList();
+  st.pickerOpen = true;
+  document.getElementById('model-picker').classList.add('open');
+  // rAF: synchronous focus loses to the editor reclaiming caret after the slash-popup keydown.
+  if (ps) {
+    requestAnimationFrame(() => { ps.focus(); ps.select(); });
+  } else {
+    document.getElementById('msg-input').focus();
+  }
+}
+
+function closeModelPicker() {
+  st.pickerOpen = false;
+  document.getElementById('model-picker').classList.remove('open');
+}
+
+function selectPickerModel(name) {
+  st.model = name;
+  invalidateTokenMeter();
+  document.getElementById('model-badge-txt').textContent = name;
+  closeModelPicker();
+  renderPickerList();
+  updateContextBadge();
+  persistConfigSoon();
+}
+
+// ─── SYSTEM PROMPT PICKER ───────────────────
+function selectSetupPrompt(id) {
+  const pid = parseInt(id, 10);
+  if (Number.isNaN(pid)) return;
+  setActiveSystemPrompt(pid);
+}
+
+function setActiveSystemPrompt(id) {
+  const p = SYSTEM_PROMPTS.find(x => x.id===id);
+  if (!p) return;
+
+  st.promptId = p.id;
+  st.systemPromptName = p.name;
+  st.systemPromptText = p.text;
+  invalidateTokenMeter();
+
+  const badge = document.getElementById('prompt-badge-txt');
+  if (badge) badge.textContent = p.name;
+
+  // Keep setup + settings UI in sync.
+  populatePromptSelect();
+  const settingsScreen = document.getElementById('screen-settings');
+  const settingsPane = document.getElementById('pane-prompts');
+  if (settingsScreen && settingsScreen.classList.contains('active') && settingsPane) {
+    renderPrompts();
+  }
+
+  // Provide feedback in chat mode.
+  const chatScreen = document.getElementById('screen-chat');
+  if (chatScreen && chatScreen.classList.contains('active')) {
+    const area = document.getElementById('messages-area');
+    if (area) {
+      const div = document.createElement('div');
+      div.className = 'sys-msg';
+      div.textContent = `— prompt set: ${p.name} —`;
+      area.appendChild(div);
+      scrollMessagesAreaToBottom(false);
+    }
+    updateContextBadge();
+  }
+  persistPromptsSoon();
+  persistConfigSoon();
+}
+
+function syncActiveSystemPromptState() {
+  const ap = getActivePrompt();
+  st.promptId = ap.id;
+  st.systemPromptName = ap.name;
+  st.systemPromptText = ap.text;
+  const badge = document.getElementById('prompt-badge-txt');
+  if (badge) badge.textContent = ap.name;
+  // If the picker is open, ensure it reflects the latest active prompt.
+  if (st.promptPickerOpen) renderPromptPickerList();
+}
+
+function renderPromptPickerList() {
+  const prompts = SYSTEM_PROMPTS;
+  st.promptPickerIdx = Math.max(0, prompts.findIndex(p => p.id===st.promptId));
+  document.getElementById('prompt-picker-list').innerHTML = prompts.map((p,i) => {
+    const preview = String(p.text || '')
+      .replace(/\s+/g,' ')
+      .slice(0, 60);
+    return `
+      <div class="picker-item${p.id===st.promptId?' cur':''}${i===st.promptPickerIdx?' hi':''}"
+           data-prompt-id="${p.id}"
+           onclick="selectPickerPrompt(${p.id})">
+        <div class="picker-dot"></div>
+        <span>${esc(p.name)}</span>
+        <span class="picker-meta">${esc(preview)}</span>
+      </div>`;
+  }).join('');
+}
+
+function highlightPromptPicker() {
+  document.querySelectorAll('#prompt-picker-list .picker-item').forEach((it,i) => {
+    const on = i===st.promptPickerIdx;
+    it.classList.toggle('hi', on);
+    if (on) it.scrollIntoView({block: 'nearest'});
+  });
+}
+
+function openPromptPicker() {
+  closeSlash();
+  closeModelPicker();
+  renderPromptPickerList();
+  st.promptPickerOpen = true;
+  document.getElementById('prompt-picker').classList.add('open');
+  document.getElementById('msg-input').focus();
+}
+
+function closePromptPicker() {
+  st.promptPickerOpen = false;
+  document.getElementById('prompt-picker').classList.remove('open');
+}
+
+function selectPickerPrompt(id) {
+  setActiveSystemPrompt(id);
+  closePromptPicker();
+}
+
+// ─── SETTINGS ──────────────────────────────
+function switchTab(name, el) {
+  document.querySelectorAll('.stab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  document.querySelectorAll('.settings-pane').forEach(p => p.classList.remove('active'));
+  document.getElementById('pane-'+name).classList.add('active');
+}
+
+function renderSettings() {
+  renderPrompts(); renderTools(); populatePromptSelect(); renderSampling(); renderIgnore(); renderReadLimits();
+}
+
+function renderReadLimits() {
+  const el = document.getElementById('read-token-limit');
+  if (el) el.value = String(READ_FILE_TOKEN_LIMIT);
+}
+
+function syncReadTokenLimit(valueStr) {
+  const n = parseInt(String(valueStr ?? '').trim(), 10);
+  if (!Number.isFinite(n) || n < 100) return;
+  READ_FILE_TOKEN_LIMIT = n;
+  persistConfigSoon();
+}
+
+function resetReadLimitsToDefaults() {
+  READ_FILE_TOKEN_LIMIT = READ_FILE_TOKEN_LIMIT_DEFAULT;
+  renderReadLimits();
+  persistConfigSoon();
+}
+
+function renderSampling() {
+  const set = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.value = String(val);
+  };
+  set('samp-temperature', st.temperature);
+  set('samp-topP', st.topP);
+  set('samp-topK', st.topK);
+  set('samp-minP', st.minP);
+  set('samp-repeatPenalty', st.repeatPenalty);
+}
+
+function syncSamplingField(field, valueStr) {
+  const s = String(valueStr ?? '').trim();
+  if (field === 'topK') {
+    const n = parseInt(s, 10);
+    if (Number.isFinite(n) && n >= 0) st.topK = n;
+    persistSamplingSoon();
+    return;
+  }
+  const n = parseFloat(s);
+  if (!Number.isFinite(n)) return;
+  st[field] = n;
+  persistSamplingSoon();
+}
+
+function resetSamplingDefaults() {
+  st.temperature = DEFAULT_SAMPLING.temperature;
+  st.topP = DEFAULT_SAMPLING.topP;
+  st.topK = DEFAULT_SAMPLING.topK;
+  st.minP = DEFAULT_SAMPLING.minP;
+  st.repeatPenalty = DEFAULT_SAMPLING.repeatPenalty;
+  renderSampling();
+  persistSamplingSoon();
+}
+
+function nextSystemPromptId() {
+  let m = 0;
+  for (const p of SYSTEM_PROMPTS) {
+    const n = Number(p.id);
+    if (Number.isFinite(n)) m = Math.max(m, n);
+  }
+  return m + 1;
+}
+
+/** After inline edits in settings; keeps chat badge, setup dropdown, picker, and token hint in sync. */
+function afterPromptEdit(p, opts) {
+  const textChanged = opts && opts.textChanged;
+  if (p.id === st.promptId) {
+    st.systemPromptName = p.name;
+    st.systemPromptText = p.text;
+    const badge = document.getElementById('prompt-badge-txt');
+    if (badge) badge.textContent = p.name;
+    if (textChanged) {
+      invalidateTokenMeter();
+      updateContextBadge();
+    }
+  }
+  populatePromptSelect();
+  if (st.promptPickerOpen) renderPromptPickerList();
+  persistPromptsSoon();
+}
+
+function getSelectedPromptId() {
+  if (Number.isFinite(st.selectedPromptId) &&
+      SYSTEM_PROMPTS.some(p => p.id === st.selectedPromptId)) {
+    return st.selectedPromptId;
+  }
+  return st.promptId;
+}
+
+function selectPromptInEditor(id) {
+  const pid = Number(id);
+  if (!Number.isFinite(pid)) return;
+  if (!SYSTEM_PROMPTS.some(p => p.id === pid)) return;
+  st.selectedPromptId = pid;
+  renderPrompts();
+}
+
+function addSystemPrompt() {
+  const id = nextSystemPromptId();
+  SYSTEM_PROMPTS.push({ id, name: 'New prompt', text: '' });
+  st.selectedPromptId = id;
+  renderPrompts();
+  populatePromptSelect();
+  if (st.promptPickerOpen) renderPromptPickerList();
+  persistPromptsSoon();
+  focusEditorName();
+}
+
+function cloneSystemPrompt() {
+  const src = SYSTEM_PROMPTS.find(p => p.id === getSelectedPromptId());
+  if (!src) return;
+  const id = nextSystemPromptId();
+  const idx = SYSTEM_PROMPTS.findIndex(p => p.id === src.id);
+  const cloned = { id, name: src.name + ' (copy)', text: src.text };
+  SYSTEM_PROMPTS.splice(idx + 1, 0, cloned);
+  st.selectedPromptId = id;
+  renderPrompts();
+  populatePromptSelect();
+  if (st.promptPickerOpen) renderPromptPickerList();
+  persistPromptsSoon();
+  focusEditorName();
+}
+
+function deleteSelectedPrompt() {
+  deleteSystemPrompt(getSelectedPromptId());
+}
+
+function deleteSystemPrompt(id) {
+  if (SYSTEM_PROMPTS.length <= 1) return;
+  const idx = SYSTEM_PROMPTS.findIndex((x) => x.id === id);
+  if (idx < 0) return;
+  const wasActive = id === st.promptId;
+  SYSTEM_PROMPTS.splice(idx, 1);
+  const fallback = SYSTEM_PROMPTS[Math.min(idx, SYSTEM_PROMPTS.length - 1)];
+  st.selectedPromptId = fallback.id;
+  if (wasActive) {
+    setActiveSystemPrompt(fallback.id);
+  } else {
+    renderPrompts();
+    populatePromptSelect();
+    if (st.promptPickerOpen) renderPromptPickerList();
+  }
+  updateContextBadge();
+  persistPromptsSoon();
+}
+
+function focusEditorName() {
+  requestAnimationFrame(() => {
+    const el = document.getElementById('prompt-editor-name');
+    if (el) { el.focus(); el.select(); }
+  });
+}
+
+// prompts — master/detail: list on the left, editor on the right
+function renderPrompts() {
+  const list = document.getElementById('prompts-list');
+  const editor = document.getElementById('prompt-editor-pane');
+  if (!list || !editor) return;
+
+  const selectedId = getSelectedPromptId();
+
+  // Left: list of selectable prompts.
+  list.replaceChildren();
+  for (const p of SYSTEM_PROMPTS) {
+    const item = document.createElement('div');
+    item.className = 'prompt-list-item' + (p.id === selectedId ? ' selected' : '');
+    item.dataset.promptId = String(p.id);
+    item.addEventListener('click', () => selectPromptInEditor(p.id));
+
+    const name = document.createElement('div');
+    name.className = 'prompt-list-item-name';
+    name.textContent = p.name || '(untitled)';
+    item.appendChild(name);
+
+    if (p.id === st.promptId) {
+      const dot = document.createElement('span');
+      dot.className = 'active-badge';
+      dot.textContent = 'active';
+      item.appendChild(dot);
+    }
+    list.appendChild(item);
+  }
+
+  // Toolbar: disable Delete when only one prompt remains.
+  const delBtn = document.getElementById('prompt-delete-btn');
+  if (delBtn) delBtn.disabled = SYSTEM_PROMPTS.length <= 1;
+
+  // Right: editor for the selected prompt.
+  editor.replaceChildren();
+  const p = SYSTEM_PROMPTS.find(x => x.id === selectedId);
+  if (!p) {
+    const empty = document.createElement('div');
+    empty.className = 'prompt-editor-empty';
+    empty.textContent = 'No prompt selected.';
+    editor.appendChild(empty);
+    return;
+  }
+
+  const header = document.createElement('div');
+  header.className = 'prompt-editor-header';
+
+  const nameIn = document.createElement('input');
+  nameIn.type = 'text';
+  nameIn.id = 'prompt-editor-name';
+  nameIn.className = 'f-input prompt-name-input';
+  nameIn.value = p.name;
+  nameIn.placeholder = 'Prompt name';
+  nameIn.addEventListener('input', () => {
+    p.name = nameIn.value;
+    const li = list.querySelector(`.prompt-list-item[data-prompt-id="${p.id}"] .prompt-list-item-name`);
+    if (li) li.textContent = p.name || '(untitled)';
+    afterPromptEdit(p);
+  });
+  header.appendChild(nameIn);
+
+  if (p.id === st.promptId) {
+    const badge = document.createElement('span');
+    badge.className = 'active-badge';
+    badge.textContent = 'active';
+    header.appendChild(badge);
+  } else {
+    const useBtn = document.createElement('button');
+    useBtn.type = 'button';
+    useBtn.className = 'act-btn';
+    useBtn.textContent = 'Use as active';
+    useBtn.addEventListener('click', () => setActiveSystemPrompt(p.id));
+    header.appendChild(useBtn);
+  }
+  editor.appendChild(header);
+
+  const md = createMarkdownEditor({
+    initialValue: p.text,
+    placeholder: 'System prompt body…',
+    onChange: (v) => {
+      p.text = v;
+      afterPromptEdit(p, { textChanged: true });
+    },
+  });
+  md.wrap.classList.add('prompt-body-editor');
+  editor.appendChild(md.wrap);
+}
+
+// Tools
+function renderTools() {
+  document.getElementById('builtin-list').innerHTML = builtinTools.map(t => `
+    <div class="tool-row">
+      <div class="tool-info">
+        <div class="tool-name">${esc(t.name)}</div>
+        <div class="tool-desc">${esc(t.desc)}</div>
+      </div>
+      <div class="perm-seg">
+        ${['ask','allow','disabled'].map(v=>`<button class="perm-opt ${v}${t.perm===v?' on':''}" onclick="setBPerm('${t.id}','${v}')">${v==='disabled'?'off':v}</button>`).join('')}
+      </div>
+    </div>`).join('');
+}
+
+function setBPerm(tid, perm) {
+  const t = builtinTools.find(x => x.id===tid);
+  if (t) {
+    t.perm = perm;
+    renderTools();
+    updateContextBadge();
+    persistToolsSoon();
+  }
+}
+
+function resetToolPermsToDefaults() {
+  for (const t of builtinTools) {
+    if (Object.prototype.hasOwnProperty.call(DEFAULT_TOOL_PERMS, t.id)) {
+      t.perm = DEFAULT_TOOL_PERMS[t.id];
+    }
+  }
+  renderTools();
+  updateContextBadge();
+  persistToolsSoon();
+}
+
+// Ignore patterns
+function renderIgnore() {
+  const cb = document.getElementById('ignore-honor-gitignore');
+  if (cb) cb.checked = !!IGNORE_STATE.honorGitignore;
+  const ta = document.getElementById('ignore-patterns');
+  if (ta && document.activeElement !== ta) {
+    ta.value = (IGNORE_STATE.patterns || []).join('\n');
+  }
+}
+
+function syncIgnoreToggle(checked) {
+  IGNORE_STATE.honorGitignore = !!checked;
+  persistIgnoreSoon();
+}
+
+function syncIgnorePatterns(text) {
+  const lines = String(text || '').split('\n').map(s => s.replace(/\r$/, ''));
+  // Trim trailing blank lines so the saved file stays tidy, but preserve interior blanks/comments.
+  while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
+  IGNORE_STATE.patterns = lines;
+  persistIgnoreSoon();
+}
+
+function resetIgnorePatternsToDefaults() {
+  IGNORE_STATE.patterns = (IGNORE_DEFAULTS || []).slice();
+  renderIgnore();
+  persistIgnoreSoon();
+}
+
+// ─── UTILS ─────────────────────────────────
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+let _mdPurifyHooked = false;
+let _markedHljsHooked = false;
+
+function initMarkdownSanitizer() {
+  if (_mdPurifyHooked || typeof DOMPurify === 'undefined') return;
+  _mdPurifyHooked = true;
+  DOMPurify.addHook('afterSanitizeAttributes', function (node) {
+    if (node.tagName === 'A' && node.hasAttribute('href')) {
+      node.setAttribute('rel', 'noopener noreferrer');
+      node.setAttribute('target', '_blank');
+    }
+  });
+}
+
+/** Plug local highlight.js into marked. Languages we don't recognize fall back
+ *  to hljs.highlightAuto so even unfenced/unknown blocks get colored. */
+function initMarkedHighlight() {
+  if (_markedHljsHooked) return;
+  if (typeof marked === 'undefined' || typeof hljs === 'undefined') return;
+  _markedHljsHooked = true;
+  marked.use({
+    renderer: {
+      code(code, infostring) {
+        const src = typeof code === 'object' && code !== null ? String(code.text ?? '') : String(code ?? '');
+        const info = typeof code === 'object' && code !== null ? String(code.lang ?? '') : String(infostring ?? '');
+        const lang = (info.match(/^\S*/) || [''])[0].toLowerCase();
+        let highlighted = '';
+        let langLabel = '';
+        try {
+          if (lang && hljs.getLanguage(lang)) {
+            highlighted = hljs.highlight(src, { language: lang, ignoreIllegals: true }).value;
+            langLabel = lang;
+          } else if (src.trim()) {
+            const auto = hljs.highlightAuto(src);
+            highlighted = auto.value;
+            langLabel = auto.language || '';
+          } else {
+            highlighted = esc(src);
+          }
+        } catch (_e) {
+          highlighted = esc(src);
+        }
+        const cls = 'hljs' + (langLabel ? ` language-${esc(langLabel)}` : '');
+        return `<pre><code class="${cls}">${highlighted}\n</code></pre>`;
+      },
+    },
+  });
+}
+
+/** Inject a header (language label + Copy button) onto every <pre> within `rootEl`.
+ *  DOMPurify forbids <button>, so this runs after sanitize on the live DOM. */
+function enhanceCodeBlocks(rootEl) {
+  if (!rootEl) return;
+  const pres = rootEl.querySelectorAll('pre');
+  for (const pre of pres) {
+    const parent = pre.parentElement;
+    if (parent && parent.classList.contains('code-block-wrap')) continue;
+    const code = pre.querySelector('code');
+    let lang = '';
+    if (code) {
+      const m = (code.className || '').match(/language-([\w+-]+)/);
+      if (m) lang = m[1];
+    }
+    const wrap = document.createElement('div');
+    wrap.className = 'code-block-wrap';
+    const header = document.createElement('div');
+    header.className = 'code-block-header';
+    const langSpan = document.createElement('span');
+    langSpan.className = 'code-block-lang';
+    langSpan.textContent = lang;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'code-block-copy';
+    btn.textContent = 'Copy';
+    btn.setAttribute('aria-label', 'Copy code');
+    header.appendChild(langSpan);
+    header.appendChild(btn);
+    pre.parentNode.insertBefore(wrap, pre);
+    wrap.appendChild(header);
+    wrap.appendChild(pre);
+  }
+}
+
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest && e.target.closest('.code-block-copy');
+  if (!btn) return;
+  const wrap = btn.closest('.code-block-wrap');
+  const pre = wrap && wrap.querySelector('pre');
+  if (!pre) return;
+  const code = pre.querySelector('code') || pre;
+  const text = code.innerText.replace(/\n$/, '');
+  const done = (ok) => {
+    btn.textContent = ok ? 'Copied' : 'Failed';
+    btn.classList.toggle('copied', !!ok);
+    clearTimeout(btn._copyTimer);
+    btn._copyTimer = setTimeout(() => {
+      btn.textContent = 'Copy';
+      btn.classList.remove('copied');
+    }, 1200);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => done(true), () => done(false));
+  } else {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+      done(true);
+    } catch {
+      done(false);
+    }
+  }
+});
+
+/** Markdown → HTML via local `marked`, then sanitized with local `DOMPurify` (no remote scripts). */
+function renderMarkdownSafe(md) {
+  const raw = String(md ?? '');
+  if (!raw.trim()) return '';
+  if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+    return esc(raw).replace(/\n/g, '<br>');
+  }
+  initMarkedHighlight();
+  let html;
+  try {
+    html = marked.parse(raw, { async: false, breaks: true });
+  } catch (err) {
+    return esc(raw).replace(/\n/g, '<br>');
+  }
+  try {
+    return DOMPurify.sanitize(String(html || ''), {
+      USE_PROFILES: { html: true },
+      FORBID_TAGS: [
+        'img',
+        'svg',
+        'math',
+        'form',
+        'input',
+        'textarea',
+        'button',
+        'select',
+        'option',
+        'iframe',
+        'object',
+        'embed',
+        'style',
+        'script',
+        'link',
+        'meta',
+        'base',
+      ],
+      FORBID_ATTR: [
+        'onerror',
+        'onload',
+        'onclick',
+        'onmouseover',
+        'onmouseenter',
+        'onfocus',
+        'onblur',
+        'oninput',
+      ],
+    });
+  } catch (err) {
+    return esc(raw).replace(/\n/g, '<br>');
+  }
+}
+
+// ─── MARKDOWN EDITOR (textarea + hljs overlay + line numbers) ─────────────
+// Two-layer editor: a real <textarea> on top (transparent text, visible caret)
+// and a per-logical-line overlay below with hljs markdown highlighting and
+// gutter. Wrapping aligns because both layers share font/line-height/padding
+// rules and the overlay's source column has the same width as the textarea's
+// content box.
+
+/** Walk an hljs HTML string and split it into per-newline strings while
+ *  keeping <span> nesting balanced (close at line end, reopen on next line). */
+function _splitHljsHtmlByLines(html) {
+  const lines = [];
+  const stack = []; // open <span ...> tags as full strings
+  let cur = '';
+  let i = 0;
+  while (i < html.length) {
+    const ch = html[i];
+    if (ch === '<') {
+      const close = html.indexOf('>', i);
+      if (close < 0) { cur += html.slice(i); break; }
+      const tag = html.slice(i, close + 1);
+      if (tag.startsWith('</')) {
+        stack.pop();
+      } else if (!tag.endsWith('/>')) {
+        stack.push(tag);
+      }
+      cur += tag;
+      i = close + 1;
+    } else if (ch === '\n') {
+      for (let k = 0; k < stack.length; k++) cur += '</span>';
+      lines.push(cur);
+      cur = stack.join('');
+      i++;
+    } else {
+      cur += ch;
+      i++;
+    }
+  }
+  lines.push(cur);
+  return lines;
+}
+
+function createMarkdownEditor({ initialValue, placeholder, onChange } = {}) {
+  const wrap = document.createElement('div');
+  wrap.className = 'md-editor';
+
+  const overlay = document.createElement('div');
+  overlay.className = 'md-editor-overlay';
+  overlay.setAttribute('aria-hidden', 'true');
+  const rows = document.createElement('div');
+  rows.className = 'md-editor-rows';
+  overlay.appendChild(rows);
+
+  const ta = document.createElement('textarea');
+  ta.className = 'md-editor-input';
+  ta.spellcheck = false;
+  ta.autocapitalize = 'off';
+  ta.autocomplete = 'off';
+  ta.setAttribute('autocorrect', 'off');
+  ta.value = initialValue || '';
+  if (placeholder) ta.placeholder = placeholder;
+
+  wrap.appendChild(overlay);
+  wrap.appendChild(ta);
+
+  function render() {
+    const text = ta.value;
+    let lineHtmls;
+    if (typeof hljs !== 'undefined' && hljs.getLanguage('markdown') && text) {
+      try {
+        const html = hljs.highlight(text, { language: 'markdown', ignoreIllegals: true }).value;
+        lineHtmls = _splitHljsHtmlByLines(html);
+      } catch (_e) {
+        lineHtmls = text.split('\n').map(esc);
+      }
+    } else {
+      lineHtmls = text.split('\n').map(esc);
+    }
+    if (lineHtmls.length === 0) lineHtmls = [''];
+    const gutterDigits = Math.max(2, String(lineHtmls.length).length);
+    wrap.style.setProperty('--md-ln-w', gutterDigits + 'ch');
+    const html = lineHtmls.map((src, idx) =>
+      `<div class="md-row"><span class="md-ln">${idx + 1}</span><span class="md-src">${src || '\u200B'}</span></div>`
+    ).join('');
+    rows.innerHTML = html;
+  }
+
+  function syncScroll() {
+    // overlay has overflow:hidden, so use transform on the rows container
+    // (overflow:hidden does not always honor programmatic scrollTop).
+    rows.style.transform = `translateY(${-ta.scrollTop}px)`;
+  }
+
+  ta.addEventListener('input', () => {
+    render();
+    syncScroll();
+    if (onChange) onChange(ta.value);
+  });
+  ta.addEventListener('scroll', syncScroll, { passive: true });
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      ta.setRangeText('  ', start, end, 'end');
+      render();
+      syncScroll();
+      if (onChange) onChange(ta.value);
+    }
+  });
+
+  render();
+  return {
+    wrap,
+    textarea: ta,
+    setValue(v) { ta.value = v == null ? '' : String(v); render(); syncScroll(); },
+    getValue() { return ta.value; },
+    focus() { ta.focus({ preventScroll: true }); },
+  };
+}
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('#dir-wrap')) closeRecent();
+  if (!e.target.closest('#model-picker') && !e.target.closest('#model-badge')) closeModelPicker();
+  if (!e.target.closest('#prompt-picker') && !e.target.closest('#prompt-badge')) closePromptPicker();
+  if (!e.target.closest('#slash-popup') && !e.target.closest('#msg-input')) closeSlash();
+  if (!e.target.closest('#prompt-dd-wrap')) closePromptDD();
+});
+
+// Ctrl/Cmd+Shift+I: open Chromium DevTools from anywhere in the app.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'i' && e.key !== 'I') return;
+  if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey) return;
+  e.preventDefault();
+  openDevTools();
+}, true);
+
+// Ctrl/Cmd+I: focus the chat composer from anywhere on the chat screen.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'i' && e.key !== 'I') return;
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+  const chat = document.getElementById('screen-chat');
+  if (!chat || !chat.classList.contains('active')) return;
+  const ov = document.getElementById('tool-perm-overlay');
+  if (ov && ov.classList.contains('open')) return;
+  if (!getEditor()) return;
+  e.preventDefault();
+  focusComposerAtEnd();
+});
+
+// Ctrl/Cmd+,: toggle the Settings screen from anywhere in the app.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== ',') return;
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+  const ov = document.getElementById('tool-perm-overlay');
+  if (ov && ov.classList.contains('open')) return;
+  e.preventDefault();
+  const settings = document.getElementById('screen-settings');
+  if (settings && settings.classList.contains('active')) {
+    goBack();
+  } else {
+    goSettings();
+  }
+});
+
+// Suppressed while the tool-perm modal is open so its own Ctrl+Enter /
+// Esc / Alt+Esc bindings stay unambiguous.
+function chatHotkeyAvailable() {
+  const chat = document.getElementById('screen-chat');
+  if (!chat || !chat.classList.contains('active')) return false;
+  const ov = document.getElementById('tool-perm-overlay');
+  if (ov && ov.classList.contains('open')) return false;
+  return true;
+}
+
+// Ctrl/Cmd+P: toggle the system prompt picker.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'p' && e.key !== 'P') return;
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+  if (!chatHotkeyAvailable()) return;
+  e.preventDefault();
+  if (st.promptPickerOpen) closePromptPicker();
+  else openPromptPicker();
+});
+
+// Ctrl/Cmd+T: toggle extended thinking.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 't' && e.key !== 'T') return;
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+  if (!chatHotkeyAvailable()) return;
+  e.preventDefault();
+  toggleThink();
+});
+
+// Shift+Tab: toggle auto-accept tool calls.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Tab' || !e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+  if (!chatHotkeyAvailable()) return;
+  e.preventDefault();
+  toggleAutoAcceptEdits();
+});
+
+// Escape: cancel an in-flight reply. Defer when a picker/slash menu is
+// open — those have their own Escape handlers that close the menu.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+  if (!st.chatInFlight) return;
+  if (!chatHotkeyAvailable()) return;
+  if (st.pickerOpen || st.promptPickerOpen) return;
+  const slash = document.getElementById('slash-popup');
+  if (slash && slash.classList.contains('open')) return;
+  e.preventDefault();
+  cancelInFlightChat();
+});
+
+// Settings tab navigation:
+//   • Ctrl+PageUp / Ctrl+PageDown      (Linux/Windows convention)
+//   • Cmd+Shift+[  / Cmd+Shift+]       (mac convention used by Slack, Terminal,
+//                                       Safari/Chrome, iTerm, etc.)
+// Use e.code for the brackets so non-US keyboard layouts still hit the same
+// physical keys.
+document.addEventListener('keydown', (e) => {
+  const settings = document.getElementById('screen-settings');
+  if (!settings || !settings.classList.contains('active')) return;
+  const ov = document.getElementById('tool-perm-overlay');
+  if (ov && ov.classList.contains('open')) return;
+
+  let dir = 0;
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+    if (e.key === 'PageUp')   dir = -1;
+    else if (e.key === 'PageDown') dir = 1;
+  }
+  if (e.metaKey && e.shiftKey && !e.altKey && !e.ctrlKey) {
+    if (e.code === 'BracketLeft')  dir = -1;
+    else if (e.code === 'BracketRight') dir = 1;
+  }
+  if (!dir) return;
+
+  const tabs = Array.from(document.querySelectorAll('.stab'));
+  if (!tabs.length) return;
+  let idx = tabs.findIndex((t) => t.classList.contains('active'));
+  if (idx < 0) idx = 0;
+  const next = (idx + dir + tabs.length) % tabs.length;
+  e.preventDefault();
+  tabs[next].click();
+});
+
+async function bootMimi() {
+  if (window._mimiBooted) return;
+  window._mimiBooted = true;
+  if (mimiApi.has()) {
+    const blob = await mimiApi.loadAll();
+    if (blob) applyHydratedState(blob);
+  }
+  initMarkdownSanitizer();
+  initToolPermOverlay();
+  initSetup();
+  initImageEditor();
+  updateContextBadge();
+}
+
+if (window.pywebview && window.pywebview.api) {
+  bootMimi();
+} else {
+  window.addEventListener('pywebviewready', bootMimi);
+  // Plain-browser fallback: if pywebview never appears, boot anyway.
+  setTimeout(() => { if (!window._mimiBooted) bootMimi(); }, 250);
+}
+</script>
+</body>
+</html>

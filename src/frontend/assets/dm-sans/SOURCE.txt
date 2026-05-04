@@ -1,0 +1,19 @@
+Asset: DM Sans (WOFF2 subsets used by Mimi theme.css)
+
+License: SIL Open Font License 1.1 — see LICENSE.txt in this directory.
+
+Upstream / download:
+  Google Fonts specimen — https://fonts.google.com/specimen/DM+Sans
+  CSS2 API (subset selection) — https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap
+  Served files (gstatic) — https://fonts.gstatic.com/s/dmsans/v17/
+
+Bundled files (this folder):
+  dm-sans.css                    — @font-face rules with local url(./…) references
+  rP2Hp2ywxg089UriCZ2IHSeH.woff2 — latin-ext subset (shared by weights 400–700)
+  rP2Hp2ywxg089UriCZOIHQ.woff2   — latin subset (shared by weights 400–700)
+
+Notes:
+  Binary .woff2 files were downloaded from fonts.gstatic.com using the CSS
+  returned by the Google Fonts API for a current Chrome user-agent (May 2026).
+  A verbatim API response for the combined Mimi stack is kept at
+  ../google-fonts-api-response.css in the parent assets folder.
