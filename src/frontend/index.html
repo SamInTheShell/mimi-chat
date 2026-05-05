@@ -91,8 +91,10 @@
   <div class="messages-area" id="messages-area"></div>
 
   <div class="chat-dock" id="chat-dock">
-    <div class="scroll-btn-row">
-      <button type="button" class="scroll-btn" id="scroll-btn" onclick="onScrollBtnClick()" title="Scroll to latest">↓</button>
+    <div class="scroll-btn-row" id="scroll-btn-row">
+      <button type="button" class="scroll-btn scroll-btn-up" id="scroll-up-btn" onclick="onScrollUpBtnClick()" title="Top of last message (Ctrl+K)" aria-label="Scroll to top of last message">↑</button>
+      <button type="button" class="scroll-btn scroll-btn-down" id="scroll-down-btn" onclick="onScrollDownBtnClick()" title="Jump to bottom + resume follow (Ctrl+J)" aria-label="Jump to bottom and resume follow">↓</button>
+      <button type="button" class="follow-toggle" id="follow-toggle-btn" onclick="onFollowToggleClick()" role="switch" aria-checked="true" title="Auto-scroll new content to the bottom"><span class="follow-toggle-mark" aria-hidden="true"></span><span class="follow-toggle-label">follow</span></button>
     </div>
     <div class="input-wrap" id="input-wrap">
     <div class="input-box">
@@ -157,6 +159,16 @@
     <div class="settings-pane active" id="pane-prompts">
       <div class="prompt-manager">
         <aside class="prompt-list-pane">
+          <div class="prompt-tpl-wrap" id="prompt-tpl-wrap">
+            <button type="button" class="act-btn act-btn-block" id="prompt-tpl-btn" onclick="togglePromptTemplatesDD(event)" title="Add a new prompt seeded from one of the built-in templates">
+              <span>+ Add from template</span>
+              <span class="tpl-caret">▾</span>
+            </button>
+            <div class="dd" id="prompt-tpl-dd">
+              <div class="dd-hdr">Built-in templates</div>
+              <div class="dd-scroll" id="prompt-tpl-list"></div>
+            </div>
+          </div>
           <div class="prompt-list-toolbar">
             <button type="button" class="act-btn" onclick="addSystemPrompt()">+ New</button>
             <button type="button" class="act-btn" id="prompt-clone-btn" onclick="cloneSystemPrompt()">Clone</button>
@@ -319,10 +331,10 @@ const mimiApi = {
     try { return (await window.pywebview.api.pick_folder(initial || '')) || ''; }
     catch (e) { console.error(e); return ''; }
   },
-  async saveTextFile(defaultFilename, content, initialDir) {
+  async saveTextFile(defaultFilename, content, initialDir, fileTypes) {
     if (!this.has()) return { ok: false, path: '', cancelled: false, error: 'No backend bridge available.' };
     try {
-      return (await window.pywebview.api.save_text_file(defaultFilename || '', content || '', initialDir || ''))
+      return (await window.pywebview.api.save_text_file(defaultFilename || '', content || '', initialDir || '', fileTypes || null))
         || { ok: false, path: '', cancelled: false, error: 'Empty response from backend.' };
     } catch (e) {
       console.error(e);
@@ -459,6 +471,11 @@ function applyHydratedState(blob) {
     const aid = Number(prompts.activeId);
     if (Number.isFinite(aid) && SYSTEM_PROMPTS.some(p => p.id === aid)) st.promptId = aid;
   }
+  if (prompts && Array.isArray(prompts.defaults)) {
+    DEFAULT_PROMPT_TEMPLATES = prompts.defaults
+      .filter(p => p && typeof p === 'object')
+      .map(p => ({ name: String(p.name || ''), text: String(p.text || '') }));
+  }
   if (Number.isFinite(cfg.promptId) && SYSTEM_PROMPTS.some(p => p.id === cfg.promptId)) {
     st.promptId = cfg.promptId;
   }
@@ -504,7 +521,8 @@ const SLASH_CMDS = [
   {cmd:'/autoedit', desc:'Toggle auto-accept for all tool calls'},
   {cmd:'/model', desc:'Open model picker'},
   {cmd:'/system', desc:'Open system prompt picker'},
-  {cmd:'/save',  desc:'Export conversation to file'},
+  {cmd:'/save-md',   desc:'Export conversation as Markdown'},
+  {cmd:'/save-json', desc:'Export raw conversation + tool payload as JSON (debug)'},
 ];
 
 /** Tools whose preview() and execute() return identical data — call once. */
@@ -521,6 +539,7 @@ const DEFAULT_TOOL_PERMS = Object.freeze({
   append_file:         'ask',
   mkdir:               'ask',
   rm:                  'ask',
+  move:                'ask',
 });
 
 let builtinTools = [
@@ -542,6 +561,8 @@ let builtinTools = [
    desc:'Create a directory in the project. Args: { path: string, recursive?: boolean }.'},
   {id:'rm',                  name:'rm',                  perm:'ask',
    desc:'Remove one or more files/directories from the project. Args: { paths: string[], recursive?: boolean }. Pass several paths in a single call to delete them together; the `recursive` flag applies to every path.'},
+  {id:'move',                name:'move',                perm:'ask',
+   desc:'Move or rename a file or directory within the project. Args: { from: string, to: string, overwrite?: boolean }. The destination parent directory must already exist. Refuses to overwrite an existing destination unless overwrite=true (file-to-file only).'},
 ];
 
 /** Runtime catalog (session only; reload resets to defaults). */
@@ -550,6 +571,10 @@ let builtinTools = [
 let SYSTEM_PROMPTS = [
   {id:1, name:'Default', text:''},
 ];
+
+/** Built-in templates from src/prompts/, populated by applyLoadedConfig.
+ *  Read-only seed list — copies are added to SYSTEM_PROMPTS via "+ Add from template". */
+let DEFAULT_PROMPT_TEMPLATES = [];
 
 function getActivePrompt() {
   const p = SYSTEM_PROMPTS.find(x => x.id === st.promptId);
@@ -594,9 +619,23 @@ let st = {
   /** @type {AbortController|null} */
   chatAbortController: null,
   chatInFlight: false,
-  /** When true, new assistant/tool content auto-scrolls the transcript to the bottom. */
-  chatStickToBottom: true,
+  /**
+   * When true, new assistant / tool content auto-scrolls the transcript to the
+   * bottom. Sending a message turns this on. The user disengages it via the
+   * follow-toggle button, the Ctrl+K hotkey, the ↑-msg button, or any user
+   * scroll gesture (wheel / touchmove / scrollbar drag / PageUp / etc.). It is
+   * never silently re-enabled — only an explicit user action turns it back on.
+   */
+  followBottom: true,
 };
+
+/** Set immediately before any of our own programmatic scrolls; cleared shortly
+ *  after. The `scroll` listener uses this to distinguish our scrolls from the
+ *  user's so we don't accidentally disengage `followBottom` from our own work. */
+let _progScrollUntil = 0;
+function markProgrammaticScroll(ms = 240) {
+  _progScrollUntil = Date.now() + ms;
+}
 
 let _modelRefreshTimer = 0;
 
@@ -1173,14 +1212,7 @@ async function changeProjectDirFromChat() {
   persistConfigSoon();
   const chatScreen = document.getElementById('screen-chat');
   if (chatScreen && chatScreen.classList.contains('active')) {
-    const area = document.getElementById('messages-area');
-    if (area) {
-      const div = document.createElement('div');
-      div.className = 'sys-msg';
-      div.textContent = `— project dir: ${st.projectDir} —`;
-      area.appendChild(div);
-      scrollMessagesAreaToBottom(false);
-    }
+    appendChatSysMsg(`— project dir: ${st.projectDir} —`);
   }
 }
 
@@ -1215,7 +1247,8 @@ function resetChatMessages() {
   invalidateTokenMeter();
   document.getElementById('messages-area').innerHTML =
     '<div class="sys-msg">— session started · /clear resets context —</div>';
-  st.chatStickToBottom = true;
+  resetVirtualState();
+  setFollowBottom(true);
   updateContextBadge();
 }
 
@@ -1714,7 +1747,8 @@ function applySlash(cmd) {
   if (cmd === '/autoedit') { toggleAutoAcceptEdits(); return; }
   if (cmd === '/model') { openModelPicker(); return; }
   if (cmd === '/system') { openPromptPicker(); return; }
-  if (cmd === '/save') { executeSave(); return; }
+  if (cmd === '/save-md')   { executeSaveMd();   return; }
+  if (cmd === '/save-json') { executeSaveJson(); return; }
   setEditorText(cmd + ' ');
 }
 
@@ -1723,7 +1757,8 @@ function executeClear() {
   invalidateTokenMeter();
   document.getElementById('messages-area').innerHTML =
     '<div class="sys-msg">— context cleared —</div>';
-  st.chatStickToBottom = true;
+  resetVirtualState();
+  setFollowBottom(true);
   updateContextBadge();
 }
 
@@ -1734,15 +1769,18 @@ function appendChatSysMsg(text) {
   div.className = 'sys-msg';
   div.textContent = text;
   area.appendChild(div);
-  scrollMessagesAreaToBottom(false);
+  enrollVirtual(div, { kind: 'sys', text: String(text || '') });
+  followStreamToBottomIfActive();
+  updateScrollBtn();
 }
 
-function defaultSaveFilename() {
+function _saveStamp() {
   const d = new Date();
   const pad = (n) => String(n).padStart(2, '0');
-  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-  return `mimi-chat-${stamp}.md`;
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
+function defaultSaveFilenameMd()   { return `mimi-chat-${_saveStamp()}.md`; }
+function defaultSaveFilenameJson() { return `mimi-chat-${_saveStamp()}.debug.json`; }
 
 function buildConversationMarkdown() {
   const out = [];
@@ -1832,17 +1870,93 @@ function buildConversationMarkdown() {
   return out.join('\n');
 }
 
-async function executeSave() {
+async function executeSaveMd() {
   if (!mimiApi.has()) {
     appendChatSysMsg('— save unavailable: no backend bridge —');
     return;
   }
   const md = buildConversationMarkdown();
-  const filename = defaultSaveFilename();
-  const initialDir = st.projectDir || '';
-  const res = await mimiApi.saveTextFile(filename, md, initialDir);
+  const res = await mimiApi.saveTextFile(
+    defaultSaveFilenameMd(),
+    md,
+    st.projectDir || '',
+    ['Markdown (*.md)', 'All files (*.*)'],
+  );
   if (res && res.ok) {
     appendChatSysMsg(`— saved to ${res.path} —`);
+  } else if (res && res.cancelled) {
+    // User dismissed the dialog — stay quiet.
+  } else {
+    const err = (res && res.error) || 'unknown error';
+    appendChatSysMsg(`— save failed: ${err} —`);
+  }
+}
+
+/**
+ * Build a debug JSON dump of the current conversation. Goal: capture exactly
+ * what the backend produced and what we send to the model, so a failed tool
+ * call can be inspected verbatim — no reparsing of `tool_calls.arguments`,
+ * no rewriting of tool results.
+ */
+function buildConversationDebugJson() {
+  const dump = {
+    schema: 'mimi-chat.debug',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    session: {
+      provider: st.provider || '',
+      model: st.model || '',
+      endpoint: (function () {
+        try { return getChatV1Base(); } catch (_e) { return ''; }
+      })(),
+      projectDir: st.projectDir || '',
+      thinking: !!st.thinking,
+      autoAcceptEdits: !!st.autoAcceptEdits,
+      systemPromptName: st.systemPromptName || '',
+      systemPromptText: st.systemPromptText || '',
+      sampling: {
+        temperature:   st.temperature,
+        topP:          st.topP,
+        topK:          st.topK,
+        minP:          st.minP,
+        repeatPenalty: st.repeatPenalty,
+      },
+      thinkingFlags: buildThinkingRequestFlags(),
+    },
+    // What the model saw on the wire for this session.
+    toolsPayload: buildToolsPayload(),
+    // Per-tool permission state, so a "denied" outcome is reproducible.
+    toolPermissions: builtinTools.map((t) => ({ id: t.id, perm: t.perm })),
+    // The raw in-memory message log. Preserves tool_calls.function.arguments
+    // as the model emitted it (string, often JSON, sometimes malformed).
+    conversationMessages: st.conversationMessages,
+    // Full request body shape the next /chat/completions call would use.
+    apiMessagesPreview: buildApiMessages(),
+  };
+  return JSON.stringify(dump, null, 2);
+}
+
+async function executeSaveJson() {
+  if (!mimiApi.has()) {
+    appendChatSysMsg('— save unavailable: no backend bridge —');
+    return;
+  }
+  let payload;
+  try {
+    payload = buildConversationDebugJson();
+  } catch (e) {
+    console.error(e);
+    appendChatSysMsg(`— debug export failed: ${String(e)} —`);
+    return;
+  }
+  const res = await mimiApi.saveTextFile(
+    defaultSaveFilenameJson(),
+    payload,
+    st.projectDir || '',
+    ['JSON (*.json)', 'All files (*.*)'],
+  );
+  if (res && res.ok) {
+    appendChatSysMsg(`— saved debug dump to ${res.path} —`);
   } else if (res && res.cancelled) {
     // User dismissed the dialog — stay quiet.
   } else {
@@ -2123,6 +2237,16 @@ const TOOL_PARAM_SCHEMAS = {
     required: ['paths'],
     additionalProperties: false,
   },
+  move: {
+    type: 'object',
+    properties: {
+      from:      { type: 'string',  description: 'Project-relative source path (file or directory).' },
+      to:        { type: 'string',  description: 'Project-relative destination path. Its parent directory must already exist.' },
+      overwrite: { type: 'boolean', description: 'Replace an existing destination file. Only applies when both source and destination are files.', default: false },
+    },
+    required: ['from', 'to'],
+    additionalProperties: false,
+  },
 };
 
 function buildToolsPayload() {
@@ -2310,6 +2434,17 @@ function _renderToolCardBody(info, errorMsg) {
     if (i.exists) s += `<div class="tool-card-note">already exists</div>`;
     return s;
   }
+  if (kind === 'move') {
+    let s = _toolCardKv('from', i.from || '')
+      + _toolCardKv('to', i.to || '')
+      + _toolCardKv('source', i.kind_of_source || '');
+    if (i.will_overwrite) {
+      s += `<div class="tool-card-note tool-card-warn">will overwrite the existing destination file</div>`;
+    } else if (i.overwrite) {
+      s += _toolCardKv('overwrite', 'yes (no-op — destination does not exist)');
+    }
+    return s;
+  }
   if (kind === 'rm') {
     const entries = Array.isArray(i.paths) ? i.paths : [];
     const rows = [];
@@ -2419,7 +2554,14 @@ function appendToolCard(info, decision, denyReason, errorMsg) {
   wrap.className = 'tool-card-wrap';
   wrap.innerHTML = renderToolCard(info, decision, denyReason, errorMsg);
   area.appendChild(wrap);
-  ensureChatElementVisible(wrap);
+  enrollVirtual(wrap, {
+    kind: 'tool-card',
+    info: _cloneVirtPayload(info),
+    decision: decision || '',
+    denyReason: denyReason || '',
+    errorMsg: errorMsg || '',
+  });
+  followStreamToBottomIfActive();
   updateScrollBtn();
 }
 
@@ -2551,8 +2693,8 @@ function requestToolPermission({ name, desc, info, errorMsg }) {
   });
 }
 
-/** Distance from bottom (px) still treated as "following" the live stream. */
-const CHAT_STICK_BOTTOM_PX = 48;
+/** Distance from bottom (px) treated as "at the bottom" for the ↓-button visibility heuristic. */
+const CHAT_AT_BOTTOM_PX = 48;
 
 /**
  * @returns {{ area: HTMLElement | null, internal: boolean, distFromBottom: number }}
@@ -2574,23 +2716,196 @@ function getChatTranscriptScrollMetrics() {
   return { area, internal: false, distFromBottom };
 }
 
-/**
- * @param {boolean} [force] When true, pin to bottom and scroll (user jumped to latest, errors, etc.).
- *   When false/omitted, only scroll if the user is already following the bottom (see `st.chatStickToBottom`).
- */
-function scrollMessagesAreaToBottom(force) {
+/** Single source of truth for `st.followBottom`. Updates the toggle UI and, when
+ *  flipping on, pins the transcript to the bottom. Never call `st.followBottom = …`
+ *  directly — go through here so the toggle stays in sync. */
+function setFollowBottom(on) {
+  const next = !!on;
+  if (st.followBottom === next) {
+    if (next) scrollChatToBottomNow();
+    syncFollowToggleUi();
+    updateScrollBtn();
+    return;
+  }
+  st.followBottom = next;
+  syncFollowToggleUi();
+  if (next) scrollChatToBottomNow();
+  updateScrollBtn();
+}
+
+function syncFollowToggleUi() {
+  const btn = document.getElementById('follow-toggle-btn');
+  if (!btn) return;
+  btn.classList.toggle('on', !!st.followBottom);
+  btn.setAttribute('aria-checked', st.followBottom ? 'true' : 'false');
+}
+
+/** Pin the transcript to the bottom. Independent of `followBottom`. */
+function scrollChatToBottomNow() {
   const m = getChatTranscriptScrollMetrics();
   if (!m.area) return;
-  if (force === true) st.chatStickToBottom = true;
-  else if (!st.chatStickToBottom) return;
-
+  // `scrollMessageToTop` inflates padding-bottom to a viewport's worth so the
+  // anchor can reach the top. Clear that here, otherwise scrollHeight still
+  // counts the runway and we land in empty space below the actual content.
+  if (m.area.style.paddingBottom) m.area.style.paddingBottom = '';
+  markProgrammaticScroll();
   if (m.internal) {
     const max = Math.max(0, m.area.scrollHeight - m.area.clientHeight);
     m.area.scrollTop = max;
     return;
   }
   const last = m.area.lastElementChild;
-  if (last) last.scrollIntoView({ block: 'end', behavior: force === true ? 'smooth' : 'auto' });
+  if (last) last.scrollIntoView({ block: 'end', behavior: 'auto' });
+}
+
+/** During streaming: scroll to bottom **only** if `followBottom` is on. */
+function followStreamToBottomIfActive() {
+  if (!st.followBottom) return;
+  scrollChatToBottomNow();
+}
+
+// ─── VIRTUALIZATION ────────────────────────
+// Long conversations would otherwise live as hundreds of fully-rendered DOM
+// nodes (markdown, code blocks, copy buttons, hljs spans). Layout/paint cost
+// climbs linearly per scroll/resize, even with `content-visibility: auto`
+// covering the easy cases. Virtualization caps the rendered DOM regardless of
+// transcript length: we keep nodes mounted while they're near the viewport,
+// and swap them for fixed-height placeholders once they're far away. The
+// stashed HTML round-trips faithfully because every appender enrolls *after*
+// its DOM is finalized (post-`finishAssistantBubble`, post-`renderToolCard`).
+
+/** Distance (in viewports) above and below the viewport that stays mounted.
+ *  IntersectionObserver `rootMargin` is a CSS-string of percentages relative
+ *  to the root. 200% means "trigger when the wrap is within 2 viewports of
+ *  the visible area" — generous so scrolling fast doesn't reveal blank space. */
+const VIRT_ROOT_MARGIN = '200% 0px';
+/** Don't bother virtualizing the first N nodes — pure overhead for short
+ *  transcripts, where every node is on screen anyway. */
+const VIRT_MIN_NODES = 24;
+
+/** @type {WeakMap<HTMLElement, { kind: string, html?: string, text?: string, info?: object, decision?: string, denyReason?: string, errorMsg?: string, mounted: boolean, height: number }>} */
+const _virtMap = new WeakMap();
+/** Live list of enrolled wrappers — we walk this for the threshold check and
+ *  to drop everything on `/clear`. Stored in DOM order. */
+let _virtList = [];
+/** @type {IntersectionObserver | null} */
+let _virtObserver = null;
+
+function _cloneVirtPayload(o) {
+  if (!o || typeof o !== 'object') return {};
+  try { return JSON.parse(JSON.stringify(o)); }
+  catch (_e) { return {}; }
+}
+
+function _virtRoot() {
+  return document.getElementById('messages-area');
+}
+
+function _virtEnsureObserver() {
+  if (_virtObserver) return _virtObserver;
+  const root = _virtRoot();
+  if (!root) return null;
+  _virtObserver = new IntersectionObserver((entries) => {
+    for (const ent of entries) {
+      const el = ent.target;
+      const state = _virtMap.get(el);
+      if (!state) continue;
+      if (ent.isIntersecting) {
+        if (!state.mounted) _virtMount(el, state);
+      } else {
+        if (state.mounted && _virtList.length >= VIRT_MIN_NODES) _virtUnmount(el, state);
+      }
+    }
+  }, { root, rootMargin: VIRT_ROOT_MARGIN, threshold: 0 });
+  return _virtObserver;
+}
+
+/** Snapshot the wrap's rendered HTML and watch it. Until the wrap leaves the
+ *  visible window, nothing changes. */
+function enrollVirtual(wrap, payload) {
+  if (!wrap || !payload) return;
+  // For msg/user/ai we already have the post-render HTML in payload.html. For
+  // tool-card we keep the source (info/decision/...) and re-render on remount
+  // — the payload is small, the rendered HTML is large.
+  const state = {
+    kind: payload.kind,
+    mounted: true,
+    height: 0,
+    html: payload.html || null,
+    text: payload.text || '',
+    info: payload.info || null,
+    decision: payload.decision || '',
+    denyReason: payload.denyReason || '',
+    errorMsg: payload.errorMsg || '',
+  };
+  _virtMap.set(wrap, state);
+  _virtList.push(wrap);
+  const obs = _virtEnsureObserver();
+  if (obs) obs.observe(wrap);
+}
+
+function _virtRebuildHtml(state) {
+  if (state.html != null) return state.html;
+  if (state.kind === 'tool-card') {
+    return renderToolCard(state.info || {}, state.decision, state.denyReason, state.errorMsg);
+  }
+  if (state.kind === 'sys' || state.kind === 'tool-trace') {
+    // textContent equivalent — escape the text the same way the original
+    // sets it (textContent is auto-escaping in DOM but we round-trip via
+    // innerHTML, so use esc()).
+    return esc(state.text || '');
+  }
+  if (state.kind === 'chat-err') {
+    return '<div class="bubble chat-err-bubble"><pre class="chat-err-pre">' + esc(state.text || '') + '</pre></div>';
+  }
+  return '';
+}
+
+function _virtUnmount(el, state) {
+  if (!state.mounted) return;
+  const h = el.offsetHeight;
+  // Skip until the wrap has had a chance to lay out; height-of-0 placeholder
+  // is worse than the rendered DOM.
+  if (h < 4) return;
+  if (state.html == null) {
+    state.html = el.innerHTML;
+  }
+  state.height = h;
+  el.innerHTML = '<div class="virt-placeholder" style="height:' + h + 'px"></div>';
+  state.mounted = false;
+}
+
+function _virtMount(el, state) {
+  if (state.mounted) return;
+  // Preserve scroll position if the rebuilt content isn't the same height as
+  // the placeholder we're replacing.
+  const area = _virtRoot();
+  const placeholderH = state.height;
+  el.innerHTML = _virtRebuildHtml(state);
+  state.mounted = true;
+  if (!area) return;
+  const newH = el.offsetHeight;
+  const delta = newH - placeholderH;
+  // If the wrap is above the viewport's current scrollTop and the height
+  // changed, shift scrollTop so visible content stays put. (Wraps below the
+  // viewport don't need adjustment.)
+  if (Math.abs(delta) > 1) {
+    const areaTop = area.getBoundingClientRect().top;
+    const wrapBottom = el.getBoundingClientRect().bottom;
+    if (wrapBottom < areaTop + 1) {
+      markProgrammaticScroll();
+      area.scrollTop += delta;
+    }
+  }
+}
+
+function resetVirtualState() {
+  if (_virtObserver) {
+    try { _virtObserver.disconnect(); } catch (_e) {}
+    _virtObserver = null;
+  }
+  _virtList = [];
+  // _virtMap is a WeakMap — GC handles it as the DOM nodes get released.
 }
 
 function appendToolTrace(text) {
@@ -2599,7 +2914,8 @@ function appendToolTrace(text) {
   row.className = 'tool-trace';
   row.textContent = text;
   area.appendChild(row);
-  ensureChatElementVisible(row);
+  enrollVirtual(row, { kind: 'tool-trace', text: String(text || '') });
+  followStreamToBottomIfActive();
   updateScrollBtn();
 }
 
@@ -2632,8 +2948,9 @@ function appendChatError(message) {
   bubble.appendChild(pre);
   wrap.appendChild(bubble);
   area.appendChild(wrap);
-  scrollMessagesAreaToBottom(true);
-  updateScrollBtn();
+  enrollVirtual(wrap, { kind: 'chat-err', text: String(message || '') });
+  // Errors are always brought into view — they're a hard interruption.
+  setFollowBottom(true);
 }
 
 function setChatBusy(busy) {
@@ -2655,13 +2972,7 @@ function cancelInFlightChat() {
 }
 
 function appendStoppedNotice() {
-  const area = document.getElementById('messages-area');
-  if (!area) return;
-  const div = document.createElement('div');
-  div.className = 'sys-msg';
-  div.textContent = '— generation stopped —';
-  area.appendChild(div);
-  scrollMessagesAreaToBottom(false);
+  appendChatSysMsg('— generation stopped —');
 }
 
 /** Restore typing focus after generation unless a modal/picker is open. */
@@ -2712,7 +3023,7 @@ function isAbortLikeError(e) {
 async function streamAssistantIntoNewBubble(apiMessages, signal) {
   const area = document.getElementById('messages-area');
   const wrap = document.createElement('div');
-  wrap.className = 'msg ai';
+  wrap.className = 'msg ai is-streaming';
   const think = document.createElement('div');
   think.className = 'think-block think-streaming';
   think.style.display = 'none';
@@ -2725,23 +3036,9 @@ async function streamAssistantIntoNewBubble(apiMessages, signal) {
   wrap.appendChild(think);
   wrap.appendChild(bubble);
   area.appendChild(wrap);
-  // First assistant bubble of the turn rides under the user message anchored
-  // at top. For continuations after tool calls, anchor the most recent tool
-  // card at the top so its details stay readable while the next assistant
-  // message streams in below — don't skip past it onto the new bubble.
-  const lastToolCard = findLastPrecedingToolCard(wrap);
-  // Element to re-pin at top once thoughts give way to content/tools — keeps
-  // the turn's framing identical to the no-thoughts path.
-  let turnAnchor = lastToolCard;
-  if (!turnAnchor) {
-    const userMsgs = area.querySelectorAll('.msg.user');
-    turnAnchor = userMsgs.length ? userMsgs[userMsgs.length - 1] : null;
-  }
-  if (lastToolCard) {
-    scrollMessageToTop(lastToolCard, { smooth: true });
-  } else {
-    scrollMessagesAreaToBottom(false);
-  }
+  // The streaming bubble is *not* enrolled for virtualization — it's still
+  // mutating. We enroll it once `finishAssistantBubble` settles its DOM.
+  followStreamToBottomIfActive();
   updateScrollBtn();
 
   const base = getChatV1Base();
@@ -2787,19 +3084,15 @@ async function streamAssistantIntoNewBubble(apiMessages, signal) {
     }
   };
 
-  // While the model is streaming reasoning before any visible content, the
-  // turn anchor sits off-screen above and the streaming-thoughts block runs
-  // off the bottom of the viewport — so the user can't watch the thoughts
-  // they're about to lose to auto-collapse. `followingThoughts` flips on for
-  // the thoughts-only phase and flips off the moment content/tool calls
-  // appear; transitioning out re-pins the turn anchor at top.
-  let followingThoughts = false;
   // Tracks the collapse done eagerly when content/tools start arriving (so
   // the user reads the assistant reply against a tidy summary, not a wall
   // of reasoning). `finishAssistantBubble` skips its own collapse when this
   // already happened.
   let thoughtsCollapsed = false;
   let collapsedBody = null;
+  let lastRenderedReasoning = '';
+  let lastRenderedContentLen = -1;
+  let lastRenderedToolCount = -1;
 
   const collapseThoughtsInPlace = () => {
     if (thoughtsCollapsed) return;
@@ -2820,34 +3113,23 @@ async function streamAssistantIntoNewBubble(apiMessages, signal) {
     collapsedBody = body;
   };
 
-  const followThinkBottom = () => {
-    if (!think.isConnected || think.style.display === 'none') return;
-    requestAnimationFrame(() => {
-      if (!think.isConnected || think.style.display === 'none') return;
-      const dock = document.getElementById('chat-dock');
-      if (!dock) return;
-      const tBot = think.getBoundingClientRect().bottom;
-      const dockTop = dock.getBoundingClientRect().top;
-      const overflow = tBot - (dockTop - 8);
-      if (overflow <= 0) return;
-      // Pour the overflow into whichever ancestor will actually scroll.
-      // messages-area is the usual scroller; fall back to the page.
-      let remaining = overflow;
-      const m = getChatTranscriptScrollMetrics();
-      if (m.area) {
-        const max = Math.max(0, m.area.scrollHeight - m.area.clientHeight);
-        const want = Math.min(m.area.scrollTop + remaining, max);
-        const moved = want - m.area.scrollTop;
-        if (moved > 0) {
-          m.area.scrollTop = want;
-          remaining -= moved;
-        }
-      }
-      if (remaining > 0) {
-        const scroller = document.scrollingElement || document.documentElement;
-        if (scroller) scroller.scrollTop = scroller.scrollTop + remaining;
-      }
+  // Coalesce per-token renders into one render per animation frame. Without
+  // this, each SSE delta re-parses + re-sanitizes + re-syntax-highlights the
+  // entire accumulated content — a 10K-token reply does that 10K times,
+  // which freezes the window. With it, we render at most ~60Hz regardless of
+  // how fast tokens arrive.
+  let _renderQueued = 0; // rAF handle, 0 when nothing pending
+  const scheduleRender = () => {
+    if (_renderQueued) return;
+    _renderQueued = requestAnimationFrame(() => {
+      _renderQueued = 0;
+      render();
     });
+  };
+  const cancelPendingRender = () => {
+    if (!_renderQueued) return;
+    cancelAnimationFrame(_renderQueued);
+    _renderQueued = 0;
   };
 
   const render = () => {
@@ -2857,45 +3139,44 @@ async function streamAssistantIntoNewBubble(apiMessages, signal) {
 
     bubble.classList.remove('assistant-pending');
 
+    // Once content (or tools) start arriving, collapse live thoughts so the
+    // assistant's actual reply isn't buried under a wall of reasoning.
+    const startedReplying = (content.length > 0 && content.trim()) || toolMap.size > 0;
+    if (startedReplying && !thoughtsCollapsed && reasoning.trim()) {
+      collapseThoughtsInPlace();
+    }
+
     if (showThink) {
-      if (thoughtsCollapsed) {
-        // Late reasoning chunks (rare): keep the collapsed body in sync so
-        // expanding the <details> shows the full thought, not a stale prefix.
-        if (collapsedBody) collapsedBody.textContent = reasoning.trim();
-      } else {
-        think.style.display = 'block';
-        think.textContent = reasoning.trim();
+      const r = reasoning;
+      if (r !== lastRenderedReasoning) {
+        if (thoughtsCollapsed) {
+          // Late reasoning chunks (rare): keep the collapsed body in sync so
+          // expanding the <details> shows the full thought, not a stale prefix.
+          if (collapsedBody) collapsedBody.textContent = r.trim();
+        } else {
+          think.style.display = 'block';
+          think.textContent = r.trim();
+        }
+        lastRenderedReasoning = r;
       }
     } else if (!thoughtsCollapsed) {
       think.style.display = 'none';
     }
-    if (content) {
-      bubble.classList.add('md-content');
-      bubble.innerHTML = renderMarkdownSafe(content) + '<span class="stream-cursor">▍</span>';
-      enhanceCodeBlocks(bubble);
-    } else {
-      bubble.classList.remove('md-content');
-      bubble.innerHTML = '<span class="stream-cursor">▍</span>';
-    }
-    // Some providers prefix the assistant content with whitespace before any
-    // real tokens; treat whitespace-only content as still in the
-    // thoughts-only phase so we don't bail out of the follow logic too early.
-    const inThoughtsOnlyPhase =
-      !thoughtsCollapsed && showThink && !content.trim() && toolMap.size === 0;
-    if (inThoughtsOnlyPhase) {
-      followingThoughts = true;
-      followThinkBottom();
-    } else {
-      if (followingThoughts) {
-        followingThoughts = false;
-        // Collapse the live thoughts immediately on the thoughts→content (or
-        // thoughts→tool) transition so the user reads the assistant reply
-        // under a tidy summary, then re-pin the turn anchor at top.
-        collapseThoughtsInPlace();
-        if (turnAnchor) scrollMessageToTop(turnAnchor, { smooth: true });
+
+    if (content.length !== lastRenderedContentLen || toolMap.size !== lastRenderedToolCount) {
+      if (content) {
+        bubble.classList.add('md-content');
+        bubble.innerHTML = renderMarkdownSafe(content) + '<span class="stream-cursor">▍</span>';
+        enhanceCodeBlocks(bubble);
+      } else {
+        bubble.classList.remove('md-content');
+        bubble.innerHTML = '<span class="stream-cursor">▍</span>';
       }
-      scrollMessagesAreaToBottom(false);
+      lastRenderedContentLen = content.length;
+      lastRenderedToolCount = toolMap.size;
     }
+
+    followStreamToBottomIfActive();
     updateScrollBtn();
   };
 
@@ -2903,6 +3184,10 @@ async function streamAssistantIntoNewBubble(apiMessages, signal) {
     '<p class="gen-stopped-foot" role="note">Generation stopped — partial reply above.</p>';
 
   function finishAssistantBubble(wasStopped) {
+    // Drop any rAF-queued render — otherwise it fires *after* this synchronous
+    // finalize and re-injects the streaming cursor over the rendered final HTML,
+    // leaving an orphan ▍ behind on every reply.
+    cancelPendingRender();
     bubble.classList.remove('assistant-pending');
 
     const tool_calls = [];
@@ -2967,13 +3252,13 @@ async function streamAssistantIntoNewBubble(apiMessages, signal) {
     }
 
     const hadReasoning = !!reasoning.trim();
-    // Stream ended without ever leaving the thoughts-only phase: the
-    // collapse just shrunk the bubble, so re-pin the turn anchor so the
-    // viewport doesn't sit on the gap left behind.
-    if (followingThoughts && turnAnchor) {
-      scrollMessageToTop(turnAnchor, { smooth: true });
-    }
-    followingThoughts = false;
+    wrap.classList.remove('is-streaming');
+    // Belt-and-suspenders: scrub any orphan streaming cursors anywhere in the
+    // wrap. If a late rAF or some path we haven't accounted for ever leaves a
+    // ▍ behind, the user sees a permanent blinking cursor on a finished reply.
+    wrap.querySelectorAll('.stream-cursor').forEach((n) => n.remove());
+    followStreamToBottomIfActive();
+    enrollVirtual(wrap, { kind: 'msg-ai', html: wrap.innerHTML });
     updateScrollBtn();
     return { assistantMsg, hadReasoning };
   }
@@ -3032,7 +3317,7 @@ async function streamAssistantIntoNewBubble(apiMessages, signal) {
         : '';
       if (rPiece) reasoning += rPiece;
       applyToolDelta(d.tool_calls);
-      render();
+      scheduleRender();
     };
 
     const drainBufferLines = () => {
@@ -3317,7 +3602,7 @@ async function runAgentLoop(userText) {
     st.chatAbortController = null;
     setChatBusy(false);
     updateContextBadge();
-    scrollMessagesAreaToBottom(false);
+    followStreamToBottomIfActive();
     updateScrollBtn();
     focusComposerIfChat();
   }
@@ -4216,7 +4501,8 @@ async function sendMessage() {
   if (val === '/autoedit') { clearEditor(); toggleAutoAcceptEdits(); return; }
   if (val === '/model')    { clearEditor(); openModelPicker();     return; }
   if (val === '/system')   { clearEditor(); openPromptPicker();    return; }
-  if (val === '/save')     { clearEditor(); executeSave();         return; }
+  if (val === '/save-md')   { clearEditor(); executeSaveMd();   return; }
+  if (val === '/save-json') { clearEditor(); executeSaveJson(); return; }
 
   const isArr = Array.isArray(content);
   const hasImages = isArr && content.some((p) => p && p.type === 'image_url');
@@ -4225,7 +4511,11 @@ async function sendMessage() {
   const area = document.getElementById('messages-area');
   const div = renderUserBubble(content);
   area.appendChild(div);
-  scrollMessageToTop(div);
+  enrollVirtual(div, { kind: 'msg-user', html: div.innerHTML });
+  // Sending a message always re-engages follow per the user-controlled toggle
+  // contract: the user just spoke, so the model's reply is what they want to
+  // see next, scrolling in live.
+  setFollowBottom(true);
   clearEditor();
   closeSlash();
   if (st.pickerOpen) closeModelPicker();
@@ -4234,30 +4524,13 @@ async function sendMessage() {
   await runAgentLoop(content);
 }
 
-/** Walk back from `wrap` and return the immediately preceding tool-card-wrap
- *  in the same tool-call batch. Returns null if there's a non-tool-card
- *  element (e.g. an assistant message) before any tool card. */
-function findLastPrecedingToolCard(wrap) {
-  let prev = wrap.previousElementSibling;
-  while (prev) {
-    if (prev.classList.contains('tool-card-wrap')) return prev;
-    if (prev.classList.contains('msg')) return null;
-    prev = prev.previousElementSibling;
-  }
-  return null;
-}
-
+/** Scroll `msgEl` so its top edge sits just below the messages-area top.
+ *  Caller decides whether to flip `followBottom` off — this helper does not. */
 function scrollMessageToTop(msgEl, opts) {
   if (!msgEl) return;
   const area = document.getElementById('messages-area');
   if (!area) return;
   const smooth = !!(opts && opts.smooth);
-
-  // Anchor `msgEl` at the top of the viewport for the rest of the turn
-  // instead of chasing the bottom as the assistant streams. The element stays
-  // put while later content grows below it, so there's no end-of-stream jump
-  // once rendering settles.
-  st.chatStickToBottom = false;
 
   // Reserve enough runway below the content that `msgEl` can reach the top
   // of the visible area even if what follows ends up short.
@@ -4271,6 +4544,7 @@ function scrollMessageToTop(msgEl, opts) {
     const target = Math.max(0, area.scrollTop + (elRect.top - areaRect.top) - 8);
     const max = Math.max(0, area.scrollHeight - area.clientHeight);
     const top = Math.min(target, max);
+    markProgrammaticScroll();
     if (smooth) {
       area.scrollTo({ top, behavior: 'smooth' });
     } else {
@@ -4280,135 +4554,133 @@ function scrollMessageToTop(msgEl, opts) {
   });
 }
 
-/** Smooth-scroll `el` into view if it isn't fully visible. Used while tool
- *  cards stream in so the user can see each one as it lands without it
- *  hiding above or below the viewport edge. */
-function ensureChatElementVisible(el) {
+/** Find the first DOM node of the latest assistant turn — the user message
+ *  that triggered it (or, if nothing has been said yet, the most recent
+ *  visible top-level node). This is the anchor used by the ↑-msg button and
+ *  Ctrl+K. */
+function getLatestTurnAnchor() {
   const area = document.getElementById('messages-area');
-  if (!area || !el) return;
-  const dock = document.getElementById('chat-dock');
-  const dockH = dock ? Math.ceil(dock.getBoundingClientRect().height) : 160;
-  area.style.paddingBottom = Math.max(dockH + 32, area.clientHeight) + 'px';
+  if (!area) return null;
+  const userMsgs = area.querySelectorAll('.msg.user');
+  if (userMsgs.length) return userMsgs[userMsgs.length - 1];
+  // No user message yet: pick the latest top-level message-area child as a
+  // sensible fallback so the button still does something useful.
+  for (let i = area.children.length - 1; i >= 0; i--) {
+    const el = area.children[i];
+    if (el.classList.contains('msg') ||
+        el.classList.contains('tool-card-wrap') ||
+        el.classList.contains('sys-msg')) return el;
+  }
+  return null;
+}
+
+function onScrollDownBtnClick() {
+  setFollowBottom(true);
+}
+
+function onScrollUpBtnClick() {
+  const anchor = getLatestTurnAnchor();
+  if (!anchor) return;
+  st.followBottom = false;
+  syncFollowToggleUi();
+  scrollMessageToTop(anchor, { smooth: true });
+}
+
+function onFollowToggleClick() {
+  setFollowBottom(!st.followBottom);
+}
+
+let _scrollBtnQueued = false;
+function updateScrollBtn() {
+  if (_scrollBtnQueued) return;
+  _scrollBtnQueued = true;
   requestAnimationFrame(() => {
-    const r = area.getBoundingClientRect();
-    const e = el.getBoundingClientRect();
-    if (e.top >= r.top && e.bottom <= r.bottom) return;
-    let delta = 0;
-    if (e.bottom > r.bottom) delta = e.bottom - r.bottom + 8;
-    else if (e.top < r.top) delta = e.top - r.top - 8;
-    if (!delta) return;
-    const max = Math.max(0, area.scrollHeight - area.clientHeight);
-    const top = Math.max(0, Math.min(area.scrollTop + delta, max));
-    area.scrollTo({ top, behavior: 'smooth' });
-    updateScrollBtn();
+    _scrollBtnQueued = false;
+    _updateScrollBtnNow();
   });
 }
 
-// ─── SCROLL-TO-BOTTOM BUTTON ───────────────
-function getLastUserMessage() {
-  const msgs = document.querySelectorAll('#messages-area .msg.user');
-  return msgs.length ? msgs[msgs.length - 1] : null;
-}
-
-function getStickyHeaderHeight() {
-  const hdr = document.querySelector('#screen-chat .hdr');
-  return hdr ? hdr.getBoundingClientRect().height : 0;
-}
-
-function messagesAreaScrolls() {
-  return getChatTranscriptScrollMetrics().internal;
-}
-
-function getLastUserTargetScroll() {
-  const lastUser = getLastUserMessage();
-  if (!lastUser) return null;
-  const area = document.getElementById('messages-area');
-  if (messagesAreaScrolls() && area) {
-    const areaRect = area.getBoundingClientRect();
-    const lastTop = lastUser.getBoundingClientRect().top;
-    return Math.max(0, area.scrollTop + (lastTop - areaRect.top) - 8);
-  }
-  const scroller = document.scrollingElement || document.documentElement;
-  const lastUserTopPage = lastUser.getBoundingClientRect().top + scroller.scrollTop;
-  return Math.max(0, lastUserTopPage - getStickyHeaderHeight() - 8);
-}
-
-function onScrollBtnClick() {
-  const area = document.getElementById('messages-area');
-  const target = getLastUserTargetScroll();
-
-  if (target === null) {
-    if (messagesAreaScrolls() && area) {
-      scrollMessagesAreaToBottom(true);
-    } else {
-      const scroller = document.scrollingElement || document.documentElement;
-      scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
-    }
-    return;
-  }
-
-  if (messagesAreaScrolls() && area) {
-    if (area.scrollTop < target - 4) {
-      area.scrollTo({ top: target, behavior: 'smooth' });
-    } else {
-      const dock = document.getElementById('chat-dock');
-      const dockH = dock ? Math.ceil(dock.getBoundingClientRect().height) : 160;
-      area.style.paddingBottom = Math.max(120, dockH + 32) + 'px';
-      requestAnimationFrame(() => {
-        scrollMessagesAreaToBottom(true);
-      });
-    }
-    return;
-  }
-
-  const scroller = document.scrollingElement || document.documentElement;
-  if (scroller.scrollTop < target - 4) {
-    scroller.scrollTo({ top: target, behavior: 'smooth' });
-  } else {
-    if (area) {
-      const dock = document.getElementById('chat-dock');
-      const dockH = dock ? Math.ceil(dock.getBoundingClientRect().height) : 160;
-      area.style.paddingBottom = Math.max(120, dockH + 32) + 'px';
-    }
-    requestAnimationFrame(() => {
-      if (area && messagesAreaScrolls()) {
-        scrollMessagesAreaToBottom(true);
-      } else {
-        scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
-      }
-    });
-  }
-}
-
-function updateScrollBtn() {
-  const btn = document.getElementById('scroll-btn');
-  if (!btn) return;
+function _updateScrollBtnNow() {
+  const row = document.getElementById('scroll-btn-row');
+  const upBtn = document.getElementById('scroll-up-btn');
+  const downBtn = document.getElementById('scroll-down-btn');
+  syncFollowToggleUi();
+  if (!row || !upBtn || !downBtn) return;
   const chatScreen = document.getElementById('screen-chat');
   if (!chatScreen || !chatScreen.classList.contains('active')) {
-    btn.classList.remove('show');
+    upBtn.classList.remove('show');
+    downBtn.classList.remove('show');
     return;
   }
   const m = getChatTranscriptScrollMetrics();
-  if (!m.area) {
-    btn.classList.remove('show');
-    return;
+  const dist = m.area ? m.distFromBottom : 0;
+  const atBottom = dist <= CHAT_AT_BOTTOM_PX;
+  // ↓ shows whenever we're not at the bottom (so the user can rejoin live).
+  if (!atBottom) downBtn.classList.add('show');
+  else downBtn.classList.remove('show');
+  // ↑ shows whenever there's an anchor available (a started turn) AND the
+  // anchor isn't already pinned at the top.
+  const anchor = getLatestTurnAnchor();
+  let showUp = false;
+  if (anchor && m.area) {
+    const areaTop = m.area.getBoundingClientRect().top;
+    const anchorTop = anchor.getBoundingClientRect().top;
+    if (anchorTop - areaTop > 16) showUp = true;
   }
-  const nearBottom = m.distFromBottom <= CHAT_STICK_BOTTOM_PX;
-  if (!nearBottom) st.chatStickToBottom = false;
-  else st.chatStickToBottom = true;
-  if (m.distFromBottom > 24) btn.classList.add('show');
-  else btn.classList.remove('show');
+  upBtn.classList.toggle('show', showUp);
 }
 
-window.addEventListener('scroll', updateScrollBtn, { passive: true });
+let _userScrollHandlerInstalled = false;
+function installUserScrollHandlers() {
+  if (_userScrollHandlerInstalled) return;
+  _userScrollHandlerInstalled = true;
+  const area = document.getElementById('messages-area');
+  if (!area) return;
+
+  // Any user gesture that scrolls the transcript disengages follow.
+  const disengageOnUserInput = () => {
+    if (st.followBottom) {
+      st.followBottom = false;
+      syncFollowToggleUi();
+    }
+  };
+  area.addEventListener('wheel', disengageOnUserInput, { passive: true });
+  area.addEventListener('touchmove', disengageOnUserInput, { passive: true });
+  // Mousedown on the messages-area outside any descendant element — typically
+  // the scrollbar gutter — disengages follow on the very first scroll tick.
+  area.addEventListener('mousedown', (e) => {
+    // Heuristic: scrollbar mousedowns hit the area itself, not a child.
+    if (e.target === area) disengageOnUserInput();
+  });
+  // Keys that move the transcript when focus is on the area / messages.
+  area.addEventListener('keydown', (e) => {
+    const k = e.key;
+    if (k === 'PageUp' || k === 'PageDown' ||
+        k === 'ArrowUp' || k === 'ArrowDown' ||
+        k === 'Home' || k === 'End' ||
+        k === ' ' /* space scrolls when no editor is focused */) {
+      disengageOnUserInput();
+    }
+  });
+
+  // Native scroll only updates the floating buttons — never disengages follow.
+  // Real user gestures already disengage explicitly via the wheel / touch /
+  // keydown / scrollbar-mousedown listeners above. Inferring intent from a
+  // raw `scroll` event was unreliable: heavy markdown rendering during a
+  // multi-tool run blocks the main thread long enough that programmatic
+  // scrolls' events fire after the 240ms `_progScrollUntil` window, and the
+  // handler would silently flip follow off even though nothing touched the
+  // mouse or keyboard.
+  area.addEventListener('scroll', updateScrollBtn, { passive: true });
+}
+
 window.addEventListener('resize', () => {
   updateScrollBtn();
   const chat = document.getElementById('screen-chat');
-  if (chat && chat.classList.contains('active') && st.chatStickToBottom) scrollMessagesAreaToBottom(false);
+  if (chat && chat.classList.contains('active') && st.followBottom) scrollChatToBottomNow();
 });
 (function bindMessagesAreaScrollBtn() {
-  const area = document.getElementById('messages-area');
-  if (area) area.addEventListener('scroll', updateScrollBtn, { passive: true });
+  installUserScrollHandlers();
 })();
 
 function toggleThink() {
@@ -4418,12 +4690,7 @@ function toggleThink() {
   btn.textContent = '◈ thinking';
   // show brief feedback in messages if in chat
   if (document.getElementById('screen-chat').classList.contains('active')) {
-    const area = document.getElementById('messages-area');
-    const div = document.createElement('div');
-    div.className = 'sys-msg';
-    div.textContent = `— thinking ${st.thinking ? 'enabled' : 'disabled'} —`;
-    area.appendChild(div);
-    scrollMessagesAreaToBottom(false);
+    appendChatSysMsg(`— thinking ${st.thinking ? 'enabled' : 'disabled'} —`);
   }
   persistConfigSoon();
 }
@@ -4439,12 +4706,7 @@ function toggleAutoAcceptEdits() {
   st.autoAcceptEdits = !st.autoAcceptEdits;
   syncAutoAcceptBadge();
   if (document.getElementById('screen-chat').classList.contains('active')) {
-    const area = document.getElementById('messages-area');
-    const div = document.createElement('div');
-    div.className = 'sys-msg';
-    div.textContent = `— auto-accept tool calls ${st.autoAcceptEdits ? 'on' : 'off'} —`;
-    area.appendChild(div);
-    scrollMessagesAreaToBottom(false);
+    appendChatSysMsg(`— auto-accept tool calls ${st.autoAcceptEdits ? 'on' : 'off'} —`);
   }
   persistConfigSoon();
 }
@@ -4551,14 +4813,7 @@ function setActiveSystemPrompt(id) {
   // Provide feedback in chat mode.
   const chatScreen = document.getElementById('screen-chat');
   if (chatScreen && chatScreen.classList.contains('active')) {
-    const area = document.getElementById('messages-area');
-    if (area) {
-      const div = document.createElement('div');
-      div.className = 'sys-msg';
-      div.textContent = `— prompt set: ${p.name} —`;
-      area.appendChild(div);
-      scrollMessagesAreaToBottom(false);
-    }
+    appendChatSysMsg(`— prompt set: ${p.name} —`);
     updateContextBadge();
   }
   persistPromptsSoon();
@@ -4754,6 +5009,73 @@ function cloneSystemPrompt() {
   if (st.promptPickerOpen) renderPromptPickerList();
   persistPromptsSoon();
   focusEditorName();
+}
+
+function uniquePromptName(base) {
+  const taken = new Set(SYSTEM_PROMPTS.map(p => p.name));
+  if (!taken.has(base)) return base;
+  for (let n = 2; n < 1000; n++) {
+    const candidate = `${base} (${n})`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return `${base} (${Date.now()})`;
+}
+
+function addPromptFromTemplate(template) {
+  if (!template) return;
+  const id = nextSystemPromptId();
+  const name = uniquePromptName(String(template.name || 'Template'));
+  SYSTEM_PROMPTS.push({ id, name, text: String(template.text || '') });
+  st.selectedPromptId = id;
+  renderPrompts();
+  populatePromptSelect();
+  if (st.promptPickerOpen) renderPromptPickerList();
+  persistPromptsSoon();
+  focusEditorName();
+}
+
+function renderPromptTemplatesDD() {
+  const list = document.getElementById('prompt-tpl-list');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!DEFAULT_PROMPT_TEMPLATES.length) {
+    const empty = document.createElement('div');
+    empty.className = 'dd-item';
+    empty.style.color = 'var(--text-faint)';
+    empty.style.cursor = 'default';
+    empty.textContent = 'No templates available.';
+    list.appendChild(empty);
+    return;
+  }
+  DEFAULT_PROMPT_TEMPLATES.forEach(t => {
+    const div = document.createElement('div');
+    div.className = 'dd-item';
+    div.textContent = t.name;
+    div.title = `Add a copy of "${t.name}" to your prompts`;
+    div.addEventListener('click', () => {
+      addPromptFromTemplate(t);
+      closePromptTemplatesDD();
+    });
+    list.appendChild(div);
+  });
+}
+
+function togglePromptTemplatesDD(e) {
+  if (e) e.stopPropagation();
+  const dd = document.getElementById('prompt-tpl-dd');
+  const btn = document.getElementById('prompt-tpl-btn');
+  if (!dd || !btn) return;
+  const willOpen = !dd.classList.contains('open');
+  if (willOpen) renderPromptTemplatesDD();
+  dd.classList.toggle('open', willOpen);
+  btn.classList.toggle('open', willOpen);
+}
+
+function closePromptTemplatesDD() {
+  const dd = document.getElementById('prompt-tpl-dd');
+  const btn = document.getElementById('prompt-tpl-btn');
+  if (dd) dd.classList.remove('open');
+  if (btn) btn.classList.remove('open');
 }
 
 function deleteSelectedPrompt() {
@@ -5241,6 +5563,7 @@ document.addEventListener('click', e => {
   if (!e.target.closest('#prompt-picker') && !e.target.closest('#prompt-badge')) closePromptPicker();
   if (!e.target.closest('#slash-popup') && !e.target.closest('#msg-input')) closeSlash();
   if (!e.target.closest('#prompt-dd-wrap')) closePromptDD();
+  if (!e.target.closest('#prompt-tpl-wrap')) closePromptTemplatesDD();
 });
 
 // Ctrl/Cmd+Shift+I: open Chromium DevTools from anywhere in the app.
@@ -5314,6 +5637,24 @@ document.addEventListener('keydown', (e) => {
   if (!chatHotkeyAvailable()) return;
   e.preventDefault();
   toggleAutoAcceptEdits();
+});
+
+// Ctrl/Cmd+J: jump to bottom and re-engage follow.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'j' && e.key !== 'J') return;
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+  if (!chatHotkeyAvailable()) return;
+  e.preventDefault();
+  setFollowBottom(true);
+});
+
+// Ctrl/Cmd+K: scroll to top of the latest assistant turn (disengages follow).
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'k' && e.key !== 'K') return;
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+  if (!chatHotkeyAvailable()) return;
+  e.preventDefault();
+  onScrollUpBtnClick();
 });
 
 // Escape: cancel an in-flight reply. Defer when a picker/slash menu is

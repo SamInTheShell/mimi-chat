@@ -87,9 +87,11 @@ class JsApi:
         first = sel[0] if isinstance(sel, (list, tuple)) else sel
         return storage.collapse_to_tilde(str(first))
 
-    def save_text_file(self, default_filename, content, initial_dir=None):
+    def save_text_file(self, default_filename, content, initial_dir=None, file_types=None):
         """Open the native save dialog and write ``content`` to the chosen path.
 
+        ``file_types`` is an optional list/tuple of filter strings like
+        ``"Markdown (*.md)"``; when omitted we offer Markdown + All files.
         Returns ``{ok, path, cancelled, error}``: ``cancelled`` is true when the
         user dismissed the dialog (no error). Path comes back tilde-collapsed.
         """
@@ -99,12 +101,16 @@ class JsApi:
 
         start = storage.expand_user_path(initial_dir) if initial_dir else str(Path.home())
         fname = (default_filename or "conversation.md").strip() or "conversation.md"
+        if isinstance(file_types, (list, tuple)) and file_types:
+            ftypes = tuple(str(x) for x in file_types if x)
+        else:
+            ftypes = ("Markdown (*.md)", "All files (*.*)")
         try:
             sel = self._window.create_file_dialog(
                 webview.SAVE_DIALOG,
                 directory=start,
                 save_filename=fname,
-                file_types=("Markdown (*.md)", "All files (*.*)"),
+                file_types=ftypes,
             )
         except Exception as e:
             return {"ok": False, "path": "", "cancelled": False, "error": f"Save dialog failed: {e}"}
@@ -234,7 +240,8 @@ hotkeys:
     /autoedit              Toggle Accept-Edits
     /model                 Open the model picker
     /system                Open the system-prompt picker
-    /save                  Export the conversation to a file
+    /save-md               Export the conversation as Markdown
+    /save-json             Export the raw conversation + tool payload as JSON (debug)
 
   Model / system-prompt pickers
     Up / Down              Move highlight

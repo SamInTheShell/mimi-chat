@@ -629,6 +629,87 @@ def mkdir_apply(root: Path, flt: _ignore_mod.IgnoreFilter, path: str, recursive:
     return {"path": Path(path).as_posix(), "created": True}
 
 
+def _resolve_move_targets(
+    root: Path,
+    flt: _ignore_mod.IgnoreFilter,
+    src: str,
+    dst: str,
+    overwrite: bool,
+) -> tuple[Path, Path, bool, bool]:
+    """Validate a move and return ``(src_path, dst_path, src_is_dir, dst_will_overwrite)``."""
+    if not isinstance(src, str) or not src.strip():
+        raise ToolError("`from` is required.")
+    if not isinstance(dst, str) or not dst.strip():
+        raise ToolError("`to` is required.")
+    src_path = _safe_join(root, src)
+    dst_path = _safe_join(root, dst)
+    if src_path == root:
+        raise ToolError("Refusing to move the project directory itself.")
+    if dst_path == root:
+        raise ToolError("Refusing to move onto the project directory itself.")
+    if not src_path.exists() and not src_path.is_symlink():
+        raise ToolError(f"Source does not exist: {src}")
+    if src_path == dst_path:
+        raise ToolError("`from` and `to` are the same path.")
+    try:
+        src_is_dir = src_path.is_dir() and not src_path.is_symlink()
+    except OSError:
+        src_is_dir = False
+    _refuse_if_ignored(flt, root, src_path, is_dir_hint=src_is_dir)
+    _refuse_if_ignored(flt, root, dst_path, is_dir_hint=src_is_dir)
+    if src_is_dir:
+        try:
+            dst_path.relative_to(src_path)
+            raise ToolError("Destination is inside the source directory.")
+        except ValueError:
+            pass
+    parent = dst_path.parent
+    if not parent.exists() or not parent.is_dir():
+        raise ToolError(f"Destination parent directory does not exist: {Path(dst).parent.as_posix()}")
+    will_overwrite = False
+    if dst_path.exists() or dst_path.is_symlink():
+        if not overwrite:
+            raise ToolError(f"Destination already exists (set overwrite=true to replace): {dst}")
+        try:
+            dst_is_dir = dst_path.is_dir() and not dst_path.is_symlink()
+        except OSError:
+            dst_is_dir = False
+        if dst_is_dir:
+            raise ToolError(f"Destination is a directory; refusing to overwrite: {dst}")
+        if src_is_dir:
+            raise ToolError(f"Cannot overwrite file with directory: {dst}")
+        will_overwrite = True
+    return src_path, dst_path, src_is_dir, will_overwrite
+
+
+def move_preview(root: Path, flt: _ignore_mod.IgnoreFilter, src: str, dst: str, overwrite: bool) -> dict:
+    src_path, dst_path, src_is_dir, will_overwrite = _resolve_move_targets(root, flt, src, dst, overwrite)
+    return {
+        "from": Path(src).as_posix(),
+        "to": Path(dst).as_posix(),
+        "kind_of_source": "dir" if src_is_dir else "file",
+        "overwrite": bool(overwrite),
+        "will_overwrite": will_overwrite,
+    }
+
+
+def move_apply(root: Path, flt: _ignore_mod.IgnoreFilter, src: str, dst: str, overwrite: bool) -> dict:
+    src_path, dst_path, src_is_dir, will_overwrite = _resolve_move_targets(root, flt, src, dst, overwrite)
+    try:
+        if will_overwrite:
+            dst_path.unlink()
+        shutil.move(str(src_path), str(dst_path))
+    except OSError as e:
+        raise ToolError(f"Move failed: {e.strerror or e}")
+    return {
+        "from": Path(src).as_posix(),
+        "to": Path(dst).as_posix(),
+        "kind_of_source": "dir" if src_is_dir else "file",
+        "overwrote": will_overwrite,
+        "moved": True,
+    }
+
+
 def _enumerate_for_rm(target: Path, root: Path, cap: int) -> tuple[list[dict], bool]:
     items: list[dict] = []
     if cap <= 0:
@@ -826,6 +907,8 @@ def preview(name: str, args: Any, root_str: str) -> dict:
         return {"kind": name, **mkdir_preview(root, flt, _arg_str(a, "path", required=True), _arg_bool(a, "recursive", True))}
     if name == "rm":
         return {"kind": name, **rm_preview(root, flt, _arg_str_list(a, "paths", required=True), _arg_bool(a, "recursive", False))}
+    if name == "move":
+        return {"kind": name, **move_preview(root, flt, _arg_str(a, "from", required=True), _arg_str(a, "to", required=True), _arg_bool(a, "overwrite", False))}
     raise ToolError(f"Unknown tool: {name}")
 
 
@@ -860,6 +943,8 @@ def execute(name: str, args: Any, root_str: str) -> dict:
         return mkdir_apply(root, flt, _arg_str(a, "path", required=True), _arg_bool(a, "recursive", True))
     if name == "rm":
         return rm_apply(root, flt, _arg_str_list(a, "paths", required=True), _arg_bool(a, "recursive", False))
+    if name == "move":
+        return move_apply(root, flt, _arg_str(a, "from", required=True), _arg_str(a, "to", required=True), _arg_bool(a, "overwrite", False))
     raise ToolError(f"Unknown tool: {name}")
 
 

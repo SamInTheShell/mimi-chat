@@ -61,6 +61,7 @@ DEFAULT_TOOLS: dict[str, str] = {
     "append_file":         "ask",
     "mkdir":               "ask",
     "rm":                  "ask",
+    "move":                "ask",
 }
 
 
@@ -265,7 +266,7 @@ def load_all() -> dict[str, Any]:
 
     return {
         "config": load_config(),
-        "prompts": load_prompts(),
+        "prompts": {**load_prompts(), "defaults": list(DEFAULT_PROMPTS["items"])},
         "sampling": load_sampling(),
         "tools": load_tools(),
         "ignore": {**load_ignore(), "defaults": list(_ignore.DEFAULT_PATTERNS)},
