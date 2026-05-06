@@ -5566,14 +5566,6 @@ document.addEventListener('click', e => {
   if (!e.target.closest('#prompt-tpl-wrap')) closePromptTemplatesDD();
 });
 
-// Ctrl/Cmd+Shift+I: open Chromium DevTools from anywhere in the app.
-document.addEventListener('keydown', (e) => {
-  if (e.key !== 'i' && e.key !== 'I') return;
-  if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey) return;
-  e.preventDefault();
-  openDevTools();
-}, true);
-
 // Ctrl/Cmd+I: focus the chat composer from anywhere on the chat screen.
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'i' && e.key !== 'I') return;

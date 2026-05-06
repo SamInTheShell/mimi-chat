@@ -295,7 +295,9 @@ def main():
         import webview
 
         html_file = Path(__file__).parent / "frontend" / "index.html"
-        url = str(html_file)
+        # as_uri() — not str() — so pywebview's is_local_url() check sees a
+        # file:// scheme and skips spinning up its bundled bottle HTTP server.
+        url = html_file.as_uri()
         if args.verbose:
             print(f"Loading frontend from {html_file}")
             if not html_file.exists():
@@ -333,6 +335,8 @@ def main():
 
         window.events.closing += _persist_window_geometry
 
+        _install_devtools_shortcut(window)
+
         if args.debug:
             window.events.loaded += lambda: _open_local_devtools(window)
 
@@ -342,6 +346,48 @@ def main():
         if devnull:
             sys.stderr = stderr
             devnull.close()
+
+
+def _install_devtools_shortcut(window):
+    """Bind Ctrl+Shift+I to open DevTools, on the Qt side rather than in JS.
+
+    Why Qt-side: a JS-bound hotkey breaks the moment the page errors out — i.e.
+    exactly when DevTools is needed most. Qt.ApplicationShortcut also makes the
+    binding fire while focus is inside the embedded Chromium view, which a plain
+    QShortcut wouldn't.
+
+    QShortcut must be constructed on the Qt main thread, but window.events.loaded
+    fires on a pywebview worker thread. The qt backend's BrowserView exposes
+    create_window_trigger as the official way to bounce a callable onto the GUI
+    thread.
+    """
+    holder = {"shortcut": None}
+
+    def install_shortcut():
+        if holder["shortcut"] is not None:
+            return
+        from qtpy.QtCore import Qt
+        from qtpy.QtGui import QKeySequence
+        from qtpy.QtWidgets import QShortcut
+        from webview.platforms.qt import BrowserView
+
+        bv = BrowserView.instances.get(window.uid)
+        if bv is None:
+            return
+        shortcut = QShortcut(QKeySequence("Ctrl+Shift+I"), bv)
+        shortcut.setContext(Qt.ApplicationShortcut)
+        shortcut.activated.connect(lambda: _open_local_devtools(window))
+        holder["shortcut"] = shortcut
+
+    def schedule_install():
+        from webview.platforms.qt import BrowserView
+
+        bv = BrowserView.instances.get(window.uid)
+        if bv is None:
+            return
+        bv.create_window_trigger.emit(install_shortcut)
+
+    window.events.loaded += schedule_install
 
 
 def _open_local_devtools(window):
