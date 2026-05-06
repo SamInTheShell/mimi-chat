@@ -2142,8 +2142,37 @@ function messageForApiWire(m) {
   return o;
 }
 
+/**
+ * Compose the system-message content sent to the model. The user's prompt text
+ * may reference tools that the user has since disabled in Settings → Tools
+ * (the built-in coding-agent prompt mentions apply_patch, edit_file, etc. by
+ * name); without an authoritative tool list the model dutifully tries to call
+ * tools it shouldn't see and gets back a "tool turned off" error. Appending a
+ * fresh allow-list at the end gives the model an explicit, current snapshot
+ * that overrides anything the prose body claims.
+ */
+function buildSystemMessageContent() {
+  const userText = String(st.systemPromptText || '').trim();
+  const enabled = builtinTools.filter((t) => t.perm !== 'disabled').map((t) => t.name);
+  let toolsBlock;
+  if (enabled.length === 0) {
+    toolsBlock =
+      '# Available tools\n\n' +
+      'No tools are available this turn. Do not attempt any tool calls — ' +
+      'every call will fail. If a previous instruction referenced a tool by name, ignore it.';
+  } else {
+    toolsBlock =
+      '# Available tools\n\n' +
+      'Only the tools listed below are available in this turn. Do not call any tool whose name ' +
+      'is not on this list, even if earlier instructions reference it — it is disabled and the call ' +
+      'will fail.\n\n' +
+      enabled.map((n) => `- ${n}`).join('\n');
+  }
+  return userText ? `${userText}\n\n---\n\n${toolsBlock}` : toolsBlock;
+}
+
 function buildApiMessages() {
-  return [{ role: 'system', content: st.systemPromptText }, ...st.conversationMessages.map(messageForApiWire)];
+  return [{ role: 'system', content: buildSystemMessageContent() }, ...st.conversationMessages.map(messageForApiWire)];
 }
 
 /** Ask the server not to emit reasoning when the UI toggle is off (best-effort; ignored by many servers). */
@@ -2387,14 +2416,56 @@ function _toolCardKv(k, v) {
   return `<div class="tool-card-row"><span class="tool-card-k">${esc(k)}</span><span class="tool-card-v">${esc(v)}</span></div>`;
 }
 
+// Fields the renderer derives or that are noise when echoing back the model's
+// arguments on an error card. Skipping them keeps the error display focused on
+// what the model actually sent.
+const _TOOL_ARG_HIDDEN_KEYS = new Set(['kind', 'name', 'diff', 'added', 'removed', 'variant']);
+
+function _toolArgLangHint(key, info) {
+  if (key === 'patch') return 'diff';
+  const fromPath = (info && (info.path || info.from || info.to)) || '';
+  if (key === 'search' || key === 'replace' || key === 'content') return _langForPath(fromPath);
+  return '';
+}
+
+function _renderToolArgRow(key, value, langHint) {
+  if (value == null) return _toolCardKv(key, '');
+  if (typeof value === 'boolean' || typeof value === 'number') {
+    return _toolCardKv(key, String(value));
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return _toolCardKv(key, '(empty)');
+    const allShortStrings = value.every((x) => typeof x === 'string' && !x.includes('\n') && x.length < 80);
+    if (allShortStrings) return _toolCardKv(key, value.join(', '));
+    return `<div class="tool-card-row-block"><span class="tool-card-k">${esc(key)}</span></div>`
+      + _hljsCodeBlock(JSON.stringify(value, null, 2), 'json');
+  }
+  if (typeof value === 'string') {
+    if (!value) return _toolCardKv(key, '');
+    if (!value.includes('\n') && value.length <= 120) return _toolCardKv(key, value);
+    return `<div class="tool-card-row-block"><span class="tool-card-k">${esc(key)}</span></div>`
+      + _hljsCodeBlock(value, langHint || '');
+  }
+  // object: serialize as JSON
+  return `<div class="tool-card-row-block"><span class="tool-card-k">${esc(key)}</span></div>`
+    + _hljsCodeBlock(JSON.stringify(value, null, 2), 'json');
+}
+
+function _renderToolArgsForError(info) {
+  const out = [];
+  for (const key of Object.keys(info)) {
+    if (_TOOL_ARG_HIDDEN_KEYS.has(key)) continue;
+    if (key.startsWith('_')) continue;
+    out.push(_renderToolArgRow(key, info[key], _toolArgLangHint(key, info)));
+  }
+  return out.join('');
+}
+
 function _renderToolCardBody(info, errorMsg) {
   const i = info && typeof info === 'object' ? info : {};
   const kind = i.kind || i.name || 'tool';
   if (errorMsg) {
-    let head = '';
-    if (i.path)  head += _toolCardKv('path', i.path);
-    if (i.query) head += _toolCardKv('query', i.query);
-    return head + `<div class="tool-card-err">${esc(errorMsg)}</div>`;
+    return _renderToolArgsForError(i) + `<div class="tool-card-err">${esc(errorMsg)}</div>`;
   }
   if (kind === 'edit_file') {
     return _toolCardKv('path', i.path || '')
@@ -3066,6 +3137,22 @@ async function streamAssistantIntoNewBubble(apiMessages, signal) {
   const toolMap = new Map();
   let finishReason = null;
   let lastUsage = null;
+  let streamPhase = 'Thinking…';
+  let streamTokens = 0;
+  let streamPhaseStart = performance.now();
+
+  const fmtTokens = (n) => {
+    if (n < 1000) return n + ' tokens';
+    return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k tokens';
+  };
+
+  const fmtElapsed = (ms) => {
+    const s = ms / 1000;
+    if (s < 60) return s.toFixed(1) + 's';
+    const m = Math.floor(s / 60);
+    const rem = (s % 60).toFixed(0);
+    return m + ':' + rem.padStart(2, '0');
+  };
 
   const applyToolDelta = (arr) => {
     if (!Array.isArray(arr)) return;
@@ -3119,6 +3206,8 @@ async function streamAssistantIntoNewBubble(apiMessages, signal) {
   // which freezes the window. With it, we render at most ~60Hz regardless of
   // how fast tokens arrive.
   let _renderQueued = 0; // rAF handle, 0 when nothing pending
+  // Tick the elapsed timer ~2×/sec even when no SSE events arrive
+  const _timerInterval = setInterval(() => scheduleRender(), 500);
   const scheduleRender = () => {
     if (_renderQueued) return;
     _renderQueued = requestAnimationFrame(() => {
@@ -3134,7 +3223,7 @@ async function streamAssistantIntoNewBubble(apiMessages, signal) {
 
   const render = () => {
     const showThink = st.thinking && reasoning.trim();
-    const hasStreamBody = showThink || content.length > 0 || toolMap.size > 0;
+    const hasStreamBody = showThink || content.length > 0 || toolMap.size > 0 || streamTokens > 0;
     if (!hasStreamBody) return;
 
     bubble.classList.remove('assistant-pending');
@@ -3163,17 +3252,26 @@ async function streamAssistantIntoNewBubble(apiMessages, signal) {
       think.style.display = 'none';
     }
 
-    if (content.length !== lastRenderedContentLen || toolMap.size !== lastRenderedToolCount) {
+    const contentChanged = content.length !== lastRenderedContentLen || toolMap.size !== lastRenderedToolCount;
+    if (contentChanged) {
+      const statusHtml = '<span class="stream-cursor">▍</span><span class="stream-status"></span>';
       if (content) {
         bubble.classList.add('md-content');
-        bubble.innerHTML = renderMarkdownSafe(content) + '<span class="stream-cursor">▍</span>';
+        bubble.innerHTML = renderMarkdownSafe(content) + statusHtml;
         enhanceCodeBlocks(bubble);
       } else {
         bubble.classList.remove('md-content');
-        bubble.innerHTML = '<span class="stream-cursor">▍</span>';
+        bubble.innerHTML = statusHtml;
       }
       lastRenderedContentLen = content.length;
       lastRenderedToolCount = toolMap.size;
+    }
+    // Cheaply update the status text without re-rendering markdown
+    const statusEl = bubble.querySelector('.stream-status');
+    if (statusEl) {
+      const elapsed = fmtElapsed(performance.now() - streamPhaseStart);
+      const detail = streamTokens > 0 ? ' ' + fmtTokens(streamTokens) : '';
+      statusEl.textContent = streamPhase + detail + ' (' + elapsed + ')';
     }
 
     followStreamToBottomIfActive();
@@ -3187,6 +3285,7 @@ async function streamAssistantIntoNewBubble(apiMessages, signal) {
     // Drop any rAF-queued render — otherwise it fires *after* this synchronous
     // finalize and re-injects the streaming cursor over the rendered final HTML,
     // leaving an orphan ▍ behind on every reply.
+    clearInterval(_timerInterval);
     cancelPendingRender();
     bubble.classList.remove('assistant-pending');
 
@@ -3308,14 +3407,17 @@ async function streamAssistantIntoNewBubble(apiMessages, signal) {
       if (!ch) return;
       if (ch.finish_reason) finishReason = ch.finish_reason;
       const d = ch.delta || ch.message || {};
-      if (typeof d.content === 'string') content += d.content;
+      const prevPhase = streamPhase;
+      if (typeof d.content === 'string') { content += d.content; streamPhase = 'Generating message…'; streamTokens++; }
       const rPiece = st.thinking
         ? (typeof d.reasoning_content === 'string' && d.reasoning_content) ||
           (typeof d.reasoning === 'string' && d.reasoning) ||
           (typeof d.thinking === 'string' && d.thinking) ||
           ''
         : '';
-      if (rPiece) reasoning += rPiece;
+      if (rPiece) { reasoning += rPiece; if (!content) streamPhase = 'Thinking…'; streamTokens++; }
+      if (Array.isArray(d.tool_calls)) { streamPhase = 'Generating tool call…'; streamTokens++; }
+      if (streamPhase !== prevPhase) streamPhaseStart = performance.now();
       applyToolDelta(d.tool_calls);
       scheduleRender();
     };
@@ -3503,22 +3605,24 @@ async function runAgentLoop(userText) {
             const reason = meta
               ? `Tool "${name}" is turned off in Settings → Tools.`
               : `Unknown tool "${name}" (not in built-in list).`;
+            const modelMsg = formatToolErrorForModel(name, reason, 'permanent');
             st.conversationMessages.push({
               role: 'tool',
               tool_call_id: tc.id,
-              content: formatToolErrorForModel(name, reason, 'permanent'),
+              content: modelMsg,
             });
-            appendToolCard({ kind: name, ...parsedArgs }, 'deny', reason);
+            appendToolCard({ kind: name, ...parsedArgs }, 'deny', '', modelMsg);
             continue;
           }
 
           if (argsParseError) {
+            const modelMsg = formatToolErrorForModel(name, argsParseError, 'retry');
             st.conversationMessages.push({
               role: 'tool',
               tool_call_id: tc.id,
-              content: formatToolErrorForModel(name, argsParseError, 'retry'),
+              content: modelMsg,
             });
-            appendToolCard({ kind: name }, 'error', '', argsParseError);
+            appendToolCard({ kind: name }, 'error', '', modelMsg);
             continue;
           }
 
@@ -3526,12 +3630,13 @@ async function runAgentLoop(userText) {
           const previewResp = await mimiApi.toolPreview(name, parsedArgs, projectDir);
           if (!previewResp || previewResp.ok !== true) {
             const errMsg = (previewResp && previewResp.error) || 'Tool preview failed.';
+            const modelMsg = formatToolErrorForModel(name, errMsg, 'retry');
             st.conversationMessages.push({
               role: 'tool',
               tool_call_id: tc.id,
-              content: formatToolErrorForModel(name, errMsg, 'retry'),
+              content: modelMsg,
             });
-            appendToolCard({ kind: name, ...parsedArgs }, 'error', '', errMsg);
+            appendToolCard({ kind: name, ...parsedArgs }, 'error', '', modelMsg);
             continue;
           }
           const previewInfo = previewResp.preview || { kind: name };
@@ -3572,12 +3677,13 @@ async function runAgentLoop(userText) {
             const callResp = await mimiApi.toolCall(name, parsedArgs, projectDir);
             if (!callResp || callResp.ok !== true) {
               const errMsg = (callResp && callResp.error) || 'Tool call failed.';
+              const modelMsg = formatToolErrorForModel(name, errMsg, 'retry');
               st.conversationMessages.push({
                 role: 'tool',
                 tool_call_id: tc.id,
-                content: formatToolErrorForModel(name, errMsg, 'retry'),
+                content: modelMsg,
               });
-              appendToolCard(previewInfo, 'error', '', errMsg);
+              appendToolCard({ ...(previewInfo || {}), ...parsedArgs }, 'error', '', modelMsg);
               continue;
             }
             renderInfo = { ...(previewInfo || {}), ...(callResp.result || {}) };

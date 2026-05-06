@@ -577,7 +577,8 @@ def apply_patch_apply(root: Path, flt: _ignore_mod.IgnoreFilter, path: str, patc
 def append_file_preview(root: Path, flt: _ignore_mod.IgnoreFilter, path: str, content: str) -> dict:
     target = _safe_join(root, path)
     if target.exists() and not target.is_file():
-        raise ToolError(f"Path is not a file: {path}")
+        kind = "directory" if target.is_dir() else "non-file"
+        raise ToolError(f"Cannot append: `{path}` is an existing {kind}, not a file.")
     _refuse_if_ignored(flt, root, target, is_dir_hint=False)
     if not isinstance(content, str):
         raise ToolError("`content` must be a string.")
@@ -594,7 +595,8 @@ def append_file_preview(root: Path, flt: _ignore_mod.IgnoreFilter, path: str, co
 def append_file_apply(root: Path, flt: _ignore_mod.IgnoreFilter, path: str, content: str) -> dict:
     target = _safe_join(root, path)
     if target.exists() and not target.is_file():
-        raise ToolError(f"Path is not a file: {path}")
+        kind = "directory" if target.is_dir() else "non-file"
+        raise ToolError(f"Cannot append: `{path}` is an existing {kind}, not a file.")
     _refuse_if_ignored(flt, root, target, is_dir_hint=False)
     if not isinstance(content, str):
         raise ToolError("`content` must be a string.")
@@ -806,7 +808,13 @@ def _arg_str(args: dict, key: str, *, required: bool = False, default: str = "")
         if required:
             raise ToolError(f"Missing argument: {key}")
         return default
-    return str(v)
+    s = str(v)
+    if required and not s.strip():
+        # Smaller models sometimes pass `""` for required paths; without this
+        # check the empty string slips into _safe_join and resolves to the
+        # project root, surfacing as a misleading "Path is not a file: ".
+        raise ToolError(f"Argument `{key}` must be a non-empty string.")
+    return s
 
 
 def _arg_int(args: dict, key: str, default: int) -> int:
