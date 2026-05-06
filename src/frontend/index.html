@@ -2602,28 +2602,50 @@ function _renderToolCardBody(info, errorMsg) {
          `<pre class="tool-card-pre">${esc(JSON.stringify(i, null, 2))}</pre>`;
 }
 
-function renderToolCard(info, decision, denyReason, errorMsg) {
+function _buildToolCopyText(info, errorMsg) {
+  const i = info && typeof info === 'object' ? info : {};
+  const kind = i.kind || i.name || 'tool';
+  const parts = [kind];
+  for (const [k, v] of Object.entries(i)) {
+    if (k === 'kind' || k === 'name') continue;
+    if (v == null) continue;
+    parts.push(`${k}: ${typeof v === 'string' ? v : JSON.stringify(v, null, 2)}`);
+  }
+  if (errorMsg) parts.push(`error: ${errorMsg}`);
+  return parts.join('\n');
+}
+
+function renderToolCard(info, decision, denyReason, errorMsg, timing) {
   const i = info && typeof info === 'object' ? info : {};
   const kind = i.kind || i.name || 'tool';
   const decHtml = _decisionBadgeHtml(decision, denyReason);
   const body = _renderToolCardBody(info, errorMsg);
+  const t = timing || {};
+  const parts = [];
+  if (t.genMs > 0) parts.push('gen ' + (t.genMs / 1000).toFixed(1) + 's');
+  if (t.genTokens > 0) parts.push(t.genTokens + ' tok');
+  if (t.execMs > 0) parts.push('exec ' + (t.execMs / 1000).toFixed(1) + 's');
+  const timeStr = parts.length ? '<span class="gen-stats">' + parts.join(' · ') + '</span>' : '';
+  const copyText = _buildToolCopyText(info, errorMsg);
   return `
     <div class="tool-card" data-kind="${esc(kind)}">
       <div class="tool-card-hdr">
         <span class="tool-card-name">${esc(kind)}</span>
         <span class="tool-card-decision">${decHtml}</span>
       </div>
-      <div class="tool-card-body">${body}</div>
+      <div class="tool-card-body">${body}
+        <div class="tool-card-foot">${timeStr}${_copyBtnHtml(copyText)}</div>
+      </div>
     </div>
   `;
 }
 
-function appendToolCard(info, decision, denyReason, errorMsg) {
+function appendToolCard(info, decision, denyReason, errorMsg, timing) {
   const area = document.getElementById('messages-area');
   if (!area) return;
   const wrap = document.createElement('div');
   wrap.className = 'tool-card-wrap';
-  wrap.innerHTML = renderToolCard(info, decision, denyReason, errorMsg);
+  wrap.innerHTML = renderToolCard(info, decision, denyReason, errorMsg, timing);
   area.appendChild(wrap);
   enrollVirtual(wrap, {
     kind: 'tool-card',
@@ -3086,6 +3108,59 @@ function isAbortLikeError(e) {
   return false;
 }
 
+/* ── Generation stats footer + copy helpers ────────────────────────── */
+
+function _genStatsHtml(tokens, durationMs) {
+  if (!tokens || !durationMs || durationMs <= 0) return '';
+  const secs = durationMs / 1000;
+  const tps = tokens / secs;
+  const tpsStr = tps >= 100 ? tps.toFixed(0) : tps.toFixed(1);
+  return `<span class="gen-stats">${tpsStr} tok/s · ${secs.toFixed(1)}s</span>`;
+}
+
+// Copy-button registry: store text by numeric index, reference from data-copy-id.
+const _copyTexts = [];
+function _copyBtnHtml(copyText) {
+  const idx = _copyTexts.length;
+  _copyTexts.push(copyText || '');
+  return `<button type="button" class="gen-copy-btn" data-copy-id="${idx}" title="Copy" aria-label="Copy">⧉</button>`;
+}
+
+// Delegated handler — identical pattern to the working code-block-copy handler.
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest && e.target.closest('.gen-copy-btn');
+  if (!btn) return;
+  const idx = Number(btn.getAttribute('data-copy-id'));
+  const text = _copyTexts[idx];
+  if (text == null) return;
+  const done = (ok) => {
+    btn.textContent = ok ? '✓' : '✗';
+    btn.classList.toggle('gen-copy-ok', ok);
+    clearTimeout(btn._copyTimer);
+    btn._copyTimer = setTimeout(() => {
+      btn.textContent = '⧉';
+      btn.classList.remove('gen-copy-ok');
+    }, 1200);
+  };
+  if (window.pywebview && window.pywebview.api && window.pywebview.api.copy_to_clipboard) {
+    window.pywebview.api.copy_to_clipboard(text).then((ok) => done(!!ok), () => done(false));
+  } else if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => done(true), () => done(false));
+  } else {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+      done(true);
+    } catch { done(false); }
+  }
+});
+
 /**
  * One streamed completion; creates a new assistant row and updates it live.
  * @param {AbortSignal} [signal]
@@ -3140,6 +3215,12 @@ async function streamAssistantIntoNewBubble(apiMessages, signal) {
   let streamPhase = 'Thinking…';
   let streamTokens = 0;
   let streamPhaseStart = performance.now();
+
+  // Per-phase stats for the final footer
+  let thinkTokens = 0, thinkStartT = 0, thinkEndT = 0;
+  let msgTokens = 0, msgStartT = 0, msgEndT = 0;
+  let toolGenTokens = 0, toolGenStartT = 0, toolGenEndT = 0;
+  const streamStartT = performance.now();
 
   const fmtTokens = (n) => {
     if (n < 1000) return n + ' tokens';
@@ -3310,10 +3391,26 @@ async function streamAssistantIntoNewBubble(apiMessages, signal) {
     else assistantMsg.content = '';
     if (hasTools) assistantMsg.tool_calls = tool_calls;
 
+    // Build think-block stats for the summary line
+    const thinkStats = _genStatsHtml(thinkTokens, thinkEndT - thinkStartT);
+    const thinkCopyBtn = reasoning.trim() ? _copyBtnHtml(reasoning.trim()) : '';
+
     if (thoughtsCollapsed) {
-      // Already collapsed at the thoughts→content transition; just keep the
-      // collapsed body's text current with the final reasoning string.
       if (collapsedBody) collapsedBody.textContent = reasoning.trim();
+      const existingSum = wrap.querySelector('.think-summary');
+      const existingDet = wrap.querySelector('details.think-details');
+      if (existingSum && (thinkStats || thinkCopyBtn)) {
+        const span = document.createElement('span');
+        span.className = 'gen-stats-group';
+        span.innerHTML = thinkStats + thinkCopyBtn;
+        existingSum.appendChild(span);
+      }
+      if (existingDet && (thinkStats || thinkCopyBtn)) {
+        const foot = document.createElement('div');
+        foot.className = 'think-footer';
+        foot.innerHTML = thinkStats + thinkCopyBtn;
+        existingDet.appendChild(foot);
+      }
     } else if (st.thinking && reasoning.trim()) {
       const rtxt = reasoning.trim();
       const det = document.createElement('details');
@@ -3321,21 +3418,40 @@ async function streamAssistantIntoNewBubble(apiMessages, signal) {
       const sum = document.createElement('summary');
       sum.className = 'think-summary';
       sum.innerHTML =
-        '<span class="think-chev" aria-hidden="true">▼</span><span class="think-summary-txt">Thoughts</span>';
+        '<span class="think-chev" aria-hidden="true">▼</span><span class="think-summary-txt">Thoughts</span>'
+        + '<span class="gen-stats-group">' + thinkStats + thinkCopyBtn + '</span>';
       const thinkBody = document.createElement('div');
       thinkBody.className = 'think-body';
       thinkBody.textContent = rtxt;
       det.appendChild(sum);
       det.appendChild(thinkBody);
+      if (thinkStats || thinkCopyBtn) {
+        const foot = document.createElement('div');
+        foot.className = 'think-footer';
+        foot.innerHTML = thinkStats + thinkCopyBtn;
+        det.appendChild(foot);
+      }
       think.replaceWith(det);
     } else {
       think.style.display = 'none';
       think.textContent = '';
     }
+
+    // Build message stats bar (right-aligned, below content, line above)
+    const totalDuration = performance.now() - streamStartT;
+    const msgStats = _genStatsHtml(msgTokens, msgEndT - msgStartT);
+    const totalTimeStr = (totalDuration / 1000).toFixed(1) + 's total';
+    const msgFooter = (msgStats || contentTrim)
+      ? '<div class="gen-footer">'
+        + (msgStats || '') + (msgStats ? ' · ' : '') + totalTimeStr
+        + _copyBtnHtml(contentTrim)
+        + '</div>'
+      : '';
+
     bubble.classList.remove('assistant-stream');
     if (contentTrim) {
       bubble.classList.add('md-content');
-      bubble.innerHTML = renderMarkdownSafe(contentTrim) + (wasStopped ? stoppedFoot : '');
+      bubble.innerHTML = renderMarkdownSafe(contentTrim) + (wasStopped ? stoppedFoot : '') + msgFooter;
       enhanceCodeBlocks(bubble);
     } else if (hasTools) {
       bubble.classList.remove('md-content');
@@ -3352,9 +3468,6 @@ async function streamAssistantIntoNewBubble(apiMessages, signal) {
 
     const hadReasoning = !!reasoning.trim();
     wrap.classList.remove('is-streaming');
-    // Belt-and-suspenders: scrub any orphan streaming cursors anywhere in the
-    // wrap. If a late rAF or some path we haven't accounted for ever leaves a
-    // ▍ behind, the user sees a permanent blinking cursor on a finished reply.
     wrap.querySelectorAll('.stream-cursor').forEach((n) => n.remove());
     followStreamToBottomIfActive();
     enrollVirtual(wrap, { kind: 'msg-ai', html: wrap.innerHTML });
@@ -3408,16 +3521,26 @@ async function streamAssistantIntoNewBubble(apiMessages, signal) {
       if (ch.finish_reason) finishReason = ch.finish_reason;
       const d = ch.delta || ch.message || {};
       const prevPhase = streamPhase;
-      if (typeof d.content === 'string') { content += d.content; streamPhase = 'Generating message…'; streamTokens++; }
+      const now = performance.now();
+      if (typeof d.content === 'string') {
+        content += d.content; streamPhase = 'Generating message…'; streamTokens++;
+        if (!msgStartT) msgStartT = now; msgEndT = now; msgTokens++;
+      }
       const rPiece = st.thinking
         ? (typeof d.reasoning_content === 'string' && d.reasoning_content) ||
           (typeof d.reasoning === 'string' && d.reasoning) ||
           (typeof d.thinking === 'string' && d.thinking) ||
           ''
         : '';
-      if (rPiece) { reasoning += rPiece; if (!content) streamPhase = 'Thinking…'; streamTokens++; }
-      if (Array.isArray(d.tool_calls)) { streamPhase = 'Generating tool call…'; streamTokens++; }
-      if (streamPhase !== prevPhase) streamPhaseStart = performance.now();
+      if (rPiece) {
+        reasoning += rPiece; if (!content) streamPhase = 'Thinking…'; streamTokens++;
+        if (!thinkStartT) thinkStartT = now; thinkEndT = now; thinkTokens++;
+      }
+      if (Array.isArray(d.tool_calls)) {
+        streamPhase = 'Generating tool call…'; streamTokens++;
+        if (!toolGenStartT) toolGenStartT = now; toolGenEndT = now; toolGenTokens++;
+      }
+      if (streamPhase !== prevPhase) streamPhaseStart = now;
       applyToolDelta(d.tool_calls);
       scheduleRender();
     };
@@ -3464,12 +3587,15 @@ async function streamAssistantIntoNewBubble(apiMessages, signal) {
     }
 
     const fin = finishAssistantBubble(cancelledUserStop);
+    const toolGenMs = toolGenEndT && toolGenStartT ? toolGenEndT - toolGenStartT : 0;
     return {
       assistantMsg: fin.assistantMsg,
       finishReason: finishReason || 'stop',
       hadReasoning: fin.hadReasoning,
       usage: lastUsage,
       cancelled: cancelledUserStop,
+      toolGenMs,
+      toolGenTokens,
     };
   } catch (e) {
     try {
@@ -3477,12 +3603,15 @@ async function streamAssistantIntoNewBubble(apiMessages, signal) {
     } catch (_) {}
     if (signal && (signal.aborted || isAbortLikeError(e))) {
       const fin = finishAssistantBubble(true);
+      const toolGenMs = toolGenEndT && toolGenStartT ? toolGenEndT - toolGenStartT : 0;
       return {
         assistantMsg: fin.assistantMsg,
         finishReason: finishReason || 'stop',
         hadReasoning: fin.hadReasoning,
         usage: lastUsage,
         cancelled: true,
+        toolGenMs,
+        toolGenTokens,
       };
     }
     if (wrap.parentNode) wrap.remove();
@@ -3581,6 +3710,8 @@ async function runAgentLoop(userText) {
           appendStoppedNotice();
           break mimiAgent;
         }
+        const _tgMs = turn.toolGenMs || 0;
+        const _tgTok = turn.toolGenTokens || 0;
         for (const tc of tcs) {
           const name = tc.function && tc.function.name;
           const rawArgs = (tc.function && tc.function.arguments) || '{}';
@@ -3611,7 +3742,7 @@ async function runAgentLoop(userText) {
               tool_call_id: tc.id,
               content: modelMsg,
             });
-            appendToolCard({ kind: name, ...parsedArgs }, 'deny', '', modelMsg);
+            appendToolCard({ kind: name, ...parsedArgs }, 'deny', '', modelMsg, { genMs: _tgMs, genTokens: _tgTok });
             continue;
           }
 
@@ -3622,11 +3753,12 @@ async function runAgentLoop(userText) {
               tool_call_id: tc.id,
               content: modelMsg,
             });
-            appendToolCard({ kind: name }, 'error', '', modelMsg);
+            appendToolCard({ kind: name }, 'error', '', modelMsg, { genMs: _tgMs, genTokens: _tgTok });
             continue;
           }
 
           const projectDir = st.projectDir || '';
+          const toolT0 = performance.now();
           const previewResp = await mimiApi.toolPreview(name, parsedArgs, projectDir);
           if (!previewResp || previewResp.ok !== true) {
             const errMsg = (previewResp && previewResp.error) || 'Tool preview failed.';
@@ -3636,7 +3768,7 @@ async function runAgentLoop(userText) {
               tool_call_id: tc.id,
               content: modelMsg,
             });
-            appendToolCard({ kind: name, ...parsedArgs }, 'error', '', modelMsg);
+            appendToolCard({ kind: name, ...parsedArgs }, 'error', '', modelMsg, { genMs: _tgMs, genTokens: _tgTok, execMs: performance.now() - toolT0 });
             continue;
           }
           const previewInfo = previewResp.preview || { kind: name };
@@ -3662,7 +3794,7 @@ async function runAgentLoop(userText) {
                 tool_call_id: tc.id,
                 content: toolContent,
               });
-              appendToolCard(previewInfo, 'deny', dr || '');
+              appendToolCard(previewInfo, 'deny', dr || '', '', { genMs: _tgMs, genTokens: _tgTok, execMs: performance.now() - toolT0 });
               continue;
             }
           }
@@ -3683,7 +3815,7 @@ async function runAgentLoop(userText) {
                 tool_call_id: tc.id,
                 content: modelMsg,
               });
-              appendToolCard({ ...(previewInfo || {}), ...parsedArgs }, 'error', '', modelMsg);
+              appendToolCard({ ...(previewInfo || {}), ...parsedArgs }, 'error', '', modelMsg, { genMs: _tgMs, genTokens: _tgTok, execMs: performance.now() - toolT0 });
               continue;
             }
             renderInfo = { ...(previewInfo || {}), ...(callResp.result || {}) };
@@ -3696,7 +3828,7 @@ async function runAgentLoop(userText) {
             tool_call_id: tc.id,
             content: JSON.stringify(modelResult),
           });
-          appendToolCard(renderInfo, decision);
+          appendToolCard(renderInfo, decision, '', '', { genMs: _tgMs, genTokens: _tgTok, execMs: performance.now() - toolT0 });
         }
         updateContextBadge();
         continue;
@@ -5472,7 +5604,9 @@ document.addEventListener('click', (e) => {
       btn.classList.remove('copied');
     }, 1200);
   };
-  if (navigator.clipboard && navigator.clipboard.writeText) {
+  if (window.pywebview && window.pywebview.api && window.pywebview.api.copy_to_clipboard) {
+    window.pywebview.api.copy_to_clipboard(text).then((ok) => done(!!ok), () => done(false));
+  } else if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(text).then(() => done(true), () => done(false));
   } else {
     try {

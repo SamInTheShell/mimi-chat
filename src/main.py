@@ -125,6 +125,21 @@ class JsApi:
             return {"ok": False, "path": str(target), "cancelled": False, "error": f"Write failed: {e}"}
         return {"ok": True, "path": storage.collapse_to_tilde(str(target)), "cancelled": False, "error": ""}
 
+    # ── clipboard ────────────────────────────
+    def copy_to_clipboard(self, text):
+        """Copy text to the system clipboard (works from file:// origins)."""
+        import subprocess, sys
+        try:
+            if sys.platform == "darwin":
+                subprocess.run(["pbcopy"], input=(text or "").encode(), check=True)
+            elif sys.platform == "win32":
+                subprocess.run(["clip"], input=(text or "").encode("utf-16-le"), check=True)
+            else:
+                subprocess.run(["xclip", "-selection", "clipboard"], input=(text or "").encode(), check=True)
+            return True
+        except Exception:
+            return False
+
     # ── devtools ─────────────────────────────
     def open_devtools(self):
         """Open (or re-show) the local DevTools window. Same panel ``--debug`` opens at startup."""
