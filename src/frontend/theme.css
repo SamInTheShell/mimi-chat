@@ -62,6 +62,12 @@ body {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  /* JetBrains Mono ships programming ligatures for ==, !=, ===, !==, ->, =>, etc.
+     They look pretty but obscure the literal characters in code previews and tool
+     args, which matters when the user is reviewing what the model actually sent.
+     Disable globally — variable-width fonts here don't use these features. */
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
 }
 
 #app {
@@ -733,28 +739,6 @@ body {
 .messages-area * {
   -webkit-user-select: text;
   user-select: text;
-}
-
-/* `content-visibility: auto` lets the browser skip layout, paint, and even
-   text shaping for off-screen messages while still keeping them in the DOM
-   (so Ctrl+F discovers them, and copy-paste across the transcript works).
-   `contain-intrinsic-size: auto N` gives the layout engine a height hint
-   while the content is skipped — it remembers the *actual* rendered height
-   once the node has been seen, so the scrollbar stops jittering. */
-.messages-area > .msg,
-.messages-area > .tool-card-wrap,
-.messages-area > .sys-msg,
-.messages-area > .tool-trace {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 240px;
-}
-/* The currently-streaming bubble must not be skipped — its height grows live,
-   and any estimated intrinsic size makes scrollHeight (and thus our
-   scroll-to-bottom target) lag behind the actual content. Auto-follow looks
-   like a blank viewport because the cursor sits below where we scrolled. */
-.messages-area > .msg.is-streaming {
-  content-visibility: visible;
-  contain-intrinsic-size: auto;
 }
 
 .sys-msg {
@@ -2292,6 +2276,17 @@ details.think-block.think-details[open] .think-chev {
   gap: 10px;
   align-items: baseline;
   font-size: 12.5px;
+}
+/* Stacked variant: key label sits on its own line, with the multiline value
+   (typically a code block) directly underneath. Used when the value would be
+   too long to fit on the same row. */
+.tool-card-row-block {
+  display: block;
+  margin-top: 2px;
+  font-size: 12.5px;
+}
+.tool-card-row-block + .tool-card-pre {
+  margin-top: 2px;
 }
 .tool-card-k {
   flex: 0 0 auto;
