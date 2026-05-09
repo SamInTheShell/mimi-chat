@@ -3,7 +3,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import storage, tools
+from . import storage, terminal, tools
 
 
 class JsApi:
@@ -16,6 +16,7 @@ class JsApi:
 
     def __init__(self) -> None:
         self._window = None
+        self._help_window = None
 
     def set_window(self, window) -> None:
         self._window = window
@@ -139,6 +140,68 @@ class JsApi:
             return True
         except Exception:
             return False
+
+    # ── terminal (PTY) ───────────────────────
+    def terminal_start(self, cols=80, rows=24, cwd=None):
+        """Start a PTY session. Returns the session id."""
+        expanded = storage.expand_user_path(cwd) if cwd else None
+        return terminal.start(cols=int(cols or 80), rows=int(rows or 24), cwd=expanded)
+
+    def terminal_write(self, session_id, data_b64):
+        """Write base64-encoded bytes (UTF-8 keystrokes) to the PTY."""
+        return terminal.write(session_id or "", data_b64 or "")
+
+    def terminal_drain(self, session_id):
+        """Drain pending output. Returns ``{ok, closed, data}`` (data is base64)."""
+        return terminal.drain(session_id or "")
+
+    def terminal_resize(self, session_id, cols, rows):
+        return terminal.resize(session_id or "", int(cols or 80), int(rows or 24))
+
+    def terminal_kill(self, session_id):
+        return terminal.kill(session_id or "")
+
+    # ── help window ──────────────────────────
+    def open_help_window(self):
+        """Open (or re-show) the user-guide window as a sibling pywebview window.
+
+        Tracked so a second click re-shows the existing window instead of
+        stacking duplicates. The ``closed`` event clears the reference so a
+        future click can spawn a fresh one after the user dismisses it.
+        """
+        if self._help_window is not None:
+            try:
+                self._help_window.show()
+                self._help_window.restore()
+                return True
+            except Exception:
+                self._help_window = None
+
+        import webview
+
+        help_path = Path(__file__).parent / "frontend" / "help.html"
+        url = help_path.as_uri()
+        try:
+            win = webview.create_window(
+                title="Mimi Chat — Guide",
+                url=url,
+                width=900,
+                height=720,
+                min_size=(640, 480),
+                resizable=True,
+            )
+        except Exception:
+            return False
+
+        def _on_closed():
+            self._help_window = None
+
+        try:
+            win.events.closed += _on_closed
+        except Exception:
+            pass
+        self._help_window = win
+        return True
 
     # ── devtools ─────────────────────────────
     def open_devtools(self):
@@ -349,6 +412,7 @@ def main():
                 pass
 
         window.events.closing += _persist_window_geometry
+        window.events.closing += terminal.shutdown_all
 
         _install_devtools_shortcut(window)
 

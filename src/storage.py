@@ -34,6 +34,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "promptId": 1,
     "readFileTokenLimit": 10000,
     "windowGeometry": {"x": None, "y": None, "width": 800, "height": 750},
+    "terminal": {"open": False, "height": None},
 }
 
 DEFAULT_PROMPTS: dict[str, Any] = default_prompts()

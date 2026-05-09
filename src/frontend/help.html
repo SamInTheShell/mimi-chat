@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mimi Chat — Guide</title>
+<link rel="stylesheet" href="assets/dm-sans/dm-sans.css">
+<link rel="stylesheet" href="assets/jetbrains-mono/jetbrains-mono.css">
+<link rel="stylesheet" href="theme.css">
+<style>
+/* Help-window overrides on top of the main app's theme. */
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.55;
+  overflow: hidden;
+}
+#help-app {
+  display: flex;
+  height: 100vh;
+  width: 100%;
+}
+
+/* ── Sidebar ── */
+.help-side {
+  width: 200px;
+  flex-shrink: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding: 18px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+}
+.help-side-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  padding: 4px 10px 10px;
+}
+.help-nav-item {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+  font-family: var(--font);
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+.help-nav-item:hover {
+  color: var(--text);
+  background: var(--surface-muted);
+}
+.help-nav-item.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: rgba(147, 168, 255, 0.28);
+}
+
+/* ── Content ── */
+.help-main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+}
+.help-page { display: none; padding: 28px 36px 48px; max-width: 760px; }
+.help-page.active { display: block; }
+
+.help-page h1 {
+  margin: 0 0 6px;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.help-page .help-lede {
+  margin: 0 0 22px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.help-page h2 {
+  margin: 26px 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.help-page p { margin: 0 0 12px; color: var(--text-secondary); }
+.help-page strong { color: var(--text); font-weight: 600; }
+.help-page code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: var(--text);
+}
+.help-page kbd {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 11px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: var(--text);
+  white-space: nowrap;
+  line-height: 1.4;
+}
+.help-page .card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  margin: 10px 0;
+}
+.help-page .card + .card { margin-top: 10px; }
+.help-page .card-title {
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.help-page .card-body {
+  color: var(--text-secondary);
+  font-size: 13.5px;
+}
+.help-page ul {
+  margin: 6px 0 12px;
+  padding-left: 20px;
+  color: var(--text-secondary);
+}
+.help-page li { margin: 4px 0; }
+.help-page li > strong { color: var(--text); }
+
+/* ── Hotkeys table ── */
+.hk-group { margin: 14px 0 22px; }
+.hk-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+.hk-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.hk-table tr + tr td { border-top: 1px solid var(--border); }
+.hk-table td {
+  padding: 8px 14px;
+  font-size: 13px;
+  vertical-align: top;
+  color: var(--text-secondary);
+}
+.hk-table td:first-child {
+  width: 220px;
+  white-space: nowrap;
+  color: var(--text);
+}
+</style>
+</head>
+<body>
+
+<div id="help-app">
+  <nav class="help-side" role="tablist" aria-label="Guide sections">
+    <div class="help-side-title">Guide</div>
+    <button type="button" class="help-nav-item active" data-page="provider" role="tab">Provider</button>
+    <button type="button" class="help-nav-item" data-page="chat" role="tab">Chat</button>
+    <button type="button" class="help-nav-item" data-page="settings" role="tab">Settings</button>
+    <button type="button" class="help-nav-item" data-page="hotkeys" role="tab">Hotkeys</button>
+  </nav>
+
+  <main class="help-main">
+
+    <!-- ─────────── PROVIDER ─────────── -->
+    <section class="help-page active" id="page-provider" role="tabpanel" aria-label="Provider">
+      <h1>Provider</h1>
+      <p class="help-lede">Pick where chat completions are served from. Mimi talks to any OpenAI-compatible <code>/v1/chat/completions</code> endpoint.</p>
+
+      <h2>Built-in shortcuts</h2>
+      <div class="card">
+        <div class="card-title">Ollama</div>
+        <div class="card-body">Local Ollama daemon at <code>http://localhost:11434/v1</code>. Run <code>ollama serve</code> and pull a model with <code>ollama pull &lt;name&gt;</code>. No API key needed.</div>
+      </div>
+      <div class="card">
+        <div class="card-title">LM Studio</div>
+        <div class="card-body">LM Studio's local server at <code>http://localhost:1234/v1</code>. Start the server from LM Studio's <em>Local Server</em> tab and load a model there first.</div>
+      </div>
+      <div class="card">
+        <div class="card-title">OpenAI compatible</div>
+        <div class="card-body">Anything else that speaks the OpenAI chat-completions wire format — llama.cpp's server, vLLM, a remote provider, etc. Paste the base URL ending in <code>/v1</code>.</div>
+      </div>
+
+      <h2>Endpoint &amp; model</h2>
+      <p>The <strong>API Endpoint</strong> field is editable for every provider — the cards just preset it. <strong>Refresh</strong> calls the server's <code>/v1/models</code> to populate the model list. If your server requires it, set the API key as an environment variable on the server side; Mimi sends an empty key by default.</p>
+
+      <h2>System prompt</h2>
+      <p>Pick a starting prompt — built-in templates ship under <em>Settings → System Prompts</em>, and your custom prompts appear in the same dropdown. You can change the prompt later from the chat composer too.</p>
+
+      <h2>Project directory</h2>
+      <p>Required. This is the sandbox root for every built-in tool — file reads, edits, listings, and the embedded terminal all run inside this directory. Use <strong>Recent</strong> to jump back to a previous project, or <strong>Browse…</strong> for a native folder picker.</p>
+
+      <h2>Starting a session</h2>
+      <p>Click <strong>START SESSION</strong> or hit <kbd>Ctrl/Cmd</kbd>+<kbd>Enter</kbd>. Once in chat, the cwd badge in the header opens a directory switcher and the model badge swaps the active model — to change <em>provider</em> or <em>endpoint</em>, restart Mimi.</p>
+    </section>
+
+    <!-- ─────────── CHAT ─────────── -->
+    <section class="help-page" id="page-chat" role="tabpanel" aria-label="Chat">
+      <h1>Chat</h1>
+      <p class="help-lede">The composer is the home base. Most features are one keystroke or one badge away.</p>
+
+      <h2>Composer basics</h2>
+      <ul>
+        <li><strong>Send:</strong> <kbd>Enter</kbd>. <strong>Newline:</strong> <kbd>Shift</kbd>+<kbd>Enter</kbd>.</li>
+        <li><strong>Focus from anywhere:</strong> <kbd>Ctrl/Cmd</kbd>+<kbd>I</kbd>.</li>
+        <li><strong>Stop a reply mid-stream:</strong> the <em>stop</em> button or <kbd>Esc</kbd>.</li>
+      </ul>
+
+      <h2>Images</h2>
+      <p>Mimi supports image input on vision models. Three ways to attach:</p>
+      <ul>
+        <li><strong>Drag &amp; drop</strong> image files straight into the composer — no need to aim for a tiny target, anywhere on the input is fine.</li>
+        <li><strong>Paste</strong> from the clipboard with <kbd>Ctrl/Cmd</kbd>+<kbd>V</kbd> (e.g. after a screenshot).</li>
+        <li>Each attached image becomes a draggable pill above the text. Reorder by dragging; remove with the × on the pill.</li>
+      </ul>
+
+      <h2>Extended thinking</h2>
+      <p>The <strong>thinking</strong> badge toggles whether the request asks the model for its hidden reasoning track. When on, thinking blocks render as collapsible cards above the reply. Toggle from the badge, with <kbd>Ctrl/Cmd</kbd>+<kbd>T</kbd>, or the <code>/think</code> slash command.</p>
+
+      <h2>Accept Edits</h2>
+      <p>The <strong>Accept Edits</strong> badge controls the tool permission flow. When <em>off</em>, every mutating tool call (edits, file moves, terminal writes you've gated, etc.) opens a permission modal. When <em>on</em>, calls run immediately — still sandboxed to the project directory. Toggle from the badge, with <kbd>Shift</kbd>+<kbd>Tab</kbd>, or <code>/autoedit</code>.</p>
+
+      <div class="card">
+        <div class="card-title">The tool-permission modal</div>
+        <div class="card-body">Shows the tool name and a preview of the action. <kbd>Ctrl/Cmd</kbd>+<kbd>Enter</kbd> allows, <kbd>Esc</kbd> denies. Use the deny-reason field (<kbd>Alt</kbd>+<kbd>Esc</kbd> to focus it) to give the model a hint about what to do differently.</div>
+      </div>
+
+      <h2>System prompts</h2>
+      <p>The prompt badge in the input bar shows the active system prompt. Click it (or <kbd>Ctrl/Cmd</kbd>+<kbd>P</kbd>, or <code>/system</code>) to switch. Manage the full library under <em>Settings → System Prompts</em>.</p>
+
+      <h2>Slash commands</h2>
+      <p>Type <kbd>/</kbd> at the start of an empty composer for the menu, or just type the command and send.</p>
+      <ul>
+        <li><code>/clear</code> — wipe the conversation context.</li>
+        <li><code>/think</code> — toggle extended thinking.</li>
+        <li><code>/autoedit</code> — toggle Accept-Edits.</li>
+        <li><code>/model</code> — open the model picker.</li>
+        <li><code>/system</code> — open the system-prompt picker.</li>
+        <li><code>/save-md</code> — export the conversation as Markdown.</li>
+        <li><code>/save-json</code> — export the raw conversation + tool payload as JSON (debug).</li>
+      </ul>
+
+      <h2>Terminal snapshots (<kbd>@</kbd>)</h2>
+      <p>Type <kbd>@</kbd> in the composer to attach a snapshot of an open terminal tab into the message — useful for asking the model about command output without copy/pasting.</p>
+
+      <h2>Embedded terminal</h2>
+      <p>Toggle the panel with <kbd>Ctrl/Cmd</kbd>+<kbd>Shift</kbd>+<kbd>`</kbd>. It opens a real PTY rooted in your project directory. Tabs: <kbd>Ctrl/Cmd</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> new, <kbd>Ctrl/Cmd</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> close, <kbd>Ctrl/Cmd</kbd>+<kbd>PgUp</kbd>/<kbd>PgDn</kbd> switch, <kbd>F2</kbd> rename.</p>
+
+      <h2>Scrolling &amp; follow</h2>
+      <ul>
+        <li><kbd>Ctrl/Cmd</kbd>+<kbd>J</kbd> jumps to the bottom and re-engages auto-follow.</li>
+        <li><kbd>Ctrl/Cmd</kbd>+<kbd>K</kbd> scrolls to the top of the latest assistant turn.</li>
+        <li>The <em>follow</em> toggle in the scroll cluster controls whether new tokens auto-scroll the view down.</li>
+      </ul>
+
+      <h2>Copy &amp; export</h2>
+      <p>Each message, thinking block, and tool card has a copy button that lifts the raw content to your clipboard. For full-conversation export, use <code>/save-md</code> or <code>/save-json</code>.</p>
+    </section>
+
+    <!-- ─────────── SETTINGS ─────────── -->
+    <section class="help-page" id="page-settings" role="tabpanel" aria-label="Settings">
+      <h1>Settings</h1>
+      <p class="help-lede">Open from the gear button in any header or with <kbd>Ctrl/Cmd</kbd>+<kbd>,</kbd>. Same hotkey closes it. Cycle tabs with <kbd>Ctrl</kbd>+<kbd>PgUp</kbd>/<kbd>PgDn</kbd> (or <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>[</kbd>/<kbd>]</kbd> on macOS).</p>
+
+      <h2>System Prompts</h2>
+      <p>A library of system prompts, stored under <code>~/.mimi-chat/</code>. The left pane lists prompts; the right pane is the editor.</p>
+      <ul>
+        <li><strong>+ Add from template</strong> seeds a new prompt from one of the built-in role templates (coding agent, writing editor, tutor, brainstorm partner, etc.).</li>
+        <li><strong>+ New</strong> creates a blank prompt; <strong>Clone</strong> duplicates the selected one; <strong>Delete</strong> removes it.</li>
+        <li>The <em>active</em> prompt is set from the chat composer or the setup screen, not here.</li>
+      </ul>
+
+      <h2>Sampling</h2>
+      <p>These fields are merged into every <code>/v1/chat/completions</code> request. Backends that don't support a field usually ignore it.</p>
+      <ul>
+        <li><strong>Temperature</strong> — randomness of token choice (typical 0–1).</li>
+        <li><strong>Top-p</strong> — nucleus sampling mass (0–1).</li>
+        <li><strong>Top-k</strong> — limit to the <em>k</em> most likely tokens (llama.cpp-style backends).</li>
+        <li><strong>Min-p</strong> — dynamic probability floor relative to the top token.</li>
+        <li><strong>Repeat penalty</strong> — discourages repeating tokens (<code>1</code> = off on most servers).</li>
+      </ul>
+      <p><em>Restore defaults</em> resets every field at once.</p>
+
+      <h2>Tools</h2>
+      <p>Two sub-sections.</p>
+      <ul>
+        <li><strong><code>read_file</code> token cap</strong> — if a single read would return more than this many estimated tokens, the call is refused so the model re-reads in parts via <code>offset</code> and <code>limit</code>. Default <code>10000</code>.</li>
+        <li><strong>Built-in tools</strong> — per-tool permission policy (<em>Allow</em> or <em>Ask</em>). Read-only tools default to Allow; mutating tools default to Ask. The chat-side <strong>Accept Edits</strong> badge bypasses every Ask while it's on.</li>
+      </ul>
+
+      <h2>Ignore</h2>
+      <p>Patterns matching these are skipped by file-listing/search tools and refused by file-touching tools. The goal is to keep small models from wasting context on caches, deps, and build outputs.</p>
+      <ul>
+        <li><strong>Honor project <code>.gitignore</code></strong> — when on, the project root's <code>.gitignore</code> is layered on top of the patterns below.</li>
+        <li><strong>Patterns</strong> — one per line, <code>.gitignore</code> syntax. Negation (<code>!</code>) and trailing-slash directory rules work like in git. <code>#</code> starts a comment.</li>
+      </ul>
+
+      <h2>DevTools</h2>
+      <p>The <em>DevTools</em> button in the settings header opens Chromium's bundled inspector attached to this window. <kbd>Ctrl/Cmd</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> works from anywhere in the app.</p>
+    </section>
+
+    <!-- ─────────── HOTKEYS ─────────── -->
+    <section class="help-page" id="page-hotkeys" role="tabpanel" aria-label="Hotkeys">
+      <h1>Hotkeys</h1>
+      <p class="help-lede">Organized by where each one is active. macOS users: <kbd>Cmd</kbd> wherever <kbd>Ctrl</kbd> is shown unless noted.</p>
+
+      <div class="hk-group">
+        <div class="hk-group-title">Global</div>
+        <table class="hk-table">
+          <tr><td><kbd>Ctrl/Cmd</kbd>+<kbd>,</kbd></td><td>Toggle Settings</td></tr>
+          <tr><td><kbd>Ctrl/Cmd</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd></td><td>Open Chromium DevTools</td></tr>
+        </table>
+      </div>
+
+      <div class="hk-group">
+        <div class="hk-group-title">Setup screen</div>
+        <table class="hk-table">
+          <tr><td><kbd>Ctrl/Cmd</kbd>+<kbd>Enter</kbd></td><td>Start the session</td></tr>
+        </table>
+      </div>
+
+      <div class="hk-group">
+        <div class="hk-group-title">Chat — composer</div>
+        <table class="hk-table">
+          <tr><td><kbd>Ctrl/Cmd</kbd>+<kbd>I</kbd></td><td>Focus the composer</td></tr>
+          <tr><td><kbd>Enter</kbd></td><td>Send message</td></tr>
+          <tr><td><kbd>Shift</kbd>+<kbd>Enter</kbd></td><td>Insert a line break</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>Stop the in-flight reply</td></tr>
+          <tr><td><kbd>/</kbd></td><td>Open the slash-command menu</td></tr>
+          <tr><td><kbd>@</kbd></td><td>Insert a terminal-snapshot reference</td></tr>
+          <tr><td><kbd>Ctrl/Cmd</kbd>+<kbd>T</kbd></td><td>Toggle extended thinking</td></tr>
+          <tr><td><kbd>Shift</kbd>+<kbd>Tab</kbd></td><td>Toggle Accept-Edits</td></tr>
+          <tr><td><kbd>Ctrl/Cmd</kbd>+<kbd>P</kbd></td><td>Toggle the system-prompt picker</td></tr>
+          <tr><td><kbd>Ctrl/Cmd</kbd>+<kbd>Z</kbd> / <kbd>Y</kbd></td><td>Undo / redo composer text</td></tr>
+        </table>
+      </div>
+
+      <div class="hk-group">
+        <div class="hk-group-title">Chat — viewport</div>
+        <table class="hk-table">
+          <tr><td><kbd>Ctrl/Cmd</kbd>+<kbd>J</kbd></td><td>Jump to bottom + resume follow</td></tr>
+          <tr><td><kbd>Ctrl/Cmd</kbd>+<kbd>K</kbd></td><td>Top of the latest assistant turn</td></tr>
+        </table>
+      </div>
+
+      <div class="hk-group">
+        <div class="hk-group-title">Slash menu &amp; pickers</div>
+        <table class="hk-table">
+          <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>Move highlight</td></tr>
+          <tr><td><kbd>Enter</kbd> (slash) / <kbd>Tab</kbd></td><td>Run highlighted command</td></tr>
+          <tr><td><kbd>Enter</kbd> (picker)</td><td>Select highlighted item</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>Close the menu / picker</td></tr>
+        </table>
+      </div>
+
+      <div class="hk-group">
+        <div class="hk-group-title">Tool-permission modal</div>
+        <table class="hk-table">
+          <tr><td><kbd>Ctrl/Cmd</kbd>+<kbd>Enter</kbd></td><td>Allow the call</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>Deny the call</td></tr>
+          <tr><td><kbd>Alt</kbd>+<kbd>Esc</kbd></td><td>Focus the deny-reason field</td></tr>
+        </table>
+      </div>
+
+      <div class="hk-group">
+        <div class="hk-group-title">Terminal panel (chat screen)</div>
+        <table class="hk-table">
+          <tr><td><kbd>Ctrl/Cmd</kbd>+<kbd>Shift</kbd>+<kbd>`</kbd></td><td>Toggle terminal panel</td></tr>
+          <tr><td><kbd>Ctrl/Cmd</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd></td><td>New tab</td></tr>
+          <tr><td><kbd>Ctrl/Cmd</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd></td><td>Close current tab</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>PgUp</kbd> / <kbd>PgDn</kbd></td><td>Switch tabs (Linux / Windows)</td></tr>
+          <tr><td><kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>[</kbd> / <kbd>]</kbd></td><td>Switch tabs (macOS)</td></tr>
+          <tr><td><kbd>F2</kbd> or double-click label</td><td>Rename current tab</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>Close terminal panel</td></tr>
+        </table>
+      </div>
+
+      <div class="hk-group">
+        <div class="hk-group-title">Settings screen</div>
+        <table class="hk-table">
+          <tr><td><kbd>Ctrl</kbd>+<kbd>PgUp</kbd> / <kbd>PgDn</kbd></td><td>Cycle tabs (Linux / Windows)</td></tr>
+          <tr><td><kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>[</kbd> / <kbd>]</kbd></td><td>Cycle tabs (macOS)</td></tr>
+        </table>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+(function () {
+  const items = document.querySelectorAll('.help-nav-item');
+  const pages = document.querySelectorAll('.help-page');
+
+  function show(name) {
+    items.forEach(b => b.classList.toggle('active', b.dataset.page === name));
+    pages.forEach(p => p.classList.toggle('active', p.id === 'page-' + name));
+    try { history.replaceState(null, '', '#' + name); } catch {}
+    const main = document.querySelector('.help-main');
+    if (main) main.scrollTop = 0;
+  }
+
+  items.forEach(b => b.addEventListener('click', () => show(b.dataset.page)));
+
+  // Deep-link via hash so the host can hint a starting page.
+  const initial = (location.hash || '').replace(/^#/, '');
+  const valid = ['provider', 'chat', 'settings', 'hotkeys'];
+  if (valid.includes(initial)) show(initial);
+})();
+</script>
+</body>
+</html>

@@ -711,6 +711,7 @@ body {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  position: relative;
 }
 
 .messages-area {
@@ -1099,6 +1100,120 @@ details.think-block.think-details[open] > summary .gen-stats-group {
   margin: 4px 0;
   display: block;
 }
+
+/* Terminal-snapshot pill — header chrome + editable <pre> for redaction. */
+.terminal-pill {
+  display: inline-block;
+  vertical-align: top;
+  width: calc(100% - 6px);
+  max-width: 720px;
+  margin: 4px 2px;
+  padding: 0;
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  user-select: none;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  box-sizing: border-box;
+}
+.terminal-pill-hdr {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 4px 8px;
+  background: var(--surface-muted);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+  cursor: grab;
+}
+.terminal-pill-hdr:active {
+  cursor: grabbing;
+}
+.terminal-pill.is-dragging {
+  opacity: 0.5;
+}
+.terminal-pill-icon {
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.terminal-pill-label {
+  font-size: 11px;
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+  min-width: 0;
+}
+.terminal-pill-tok {
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+}
+.terminal-pill-refresh,
+.terminal-pill-rm {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  transition: color 0.15s, background 0.15s;
+}
+.terminal-pill-refresh:hover,
+.terminal-pill-rm:hover {
+  color: var(--text);
+  background: var(--surface-raised);
+}
+.terminal-pill-rm {
+  margin-left: auto;
+  font-size: 14px;
+}
+.terminal-pill-refresh {
+  margin-left: auto;
+}
+.terminal-pill-rm + .terminal-pill-rm,
+.terminal-pill-refresh + .terminal-pill-rm {
+  margin-left: 0;
+}
+.terminal-pill-body {
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--canvas);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.35;
+  white-space: pre;
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 240px;
+  user-select: text;
+  outline: none;
+  cursor: text;
+  word-break: normal;
+  tab-size: 4;
+}
+.terminal-pill-body:focus {
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--accent-soft);
+}
+
+/* Bubble rendering of the same pill (read-only — the markdown renderer turns
+ * the serialized fence into a code block; nothing extra to do here). */
 
 .input-bar {
   display: flex;
@@ -2626,5 +2741,262 @@ textarea#ignore-patterns {
 .ignore-toggle input:checked + span::before {
   transform: translate(16px, -50%);
   background: var(--accent);
+}
+
+/* ── Terminal drawer (Ctrl+Shift+T) ── */
+.terminal-dock {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: min(60vh, 480px);
+  min-height: 220px;
+  background: var(--surface);
+  border-top: 1px solid var(--border-strong);
+  box-shadow: 0 -10px 36px rgba(0, 0, 0, 0.45);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  transform: translateY(100%);
+  transition: transform 180ms ease;
+  pointer-events: none;
+}
+.terminal-dock.open {
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.terminal-dock-resize {
+  height: 6px;
+  flex-shrink: 0;
+  cursor: ns-resize;
+  background: transparent;
+  position: relative;
+}
+.terminal-dock-resize::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 36px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--border-strong);
+  transform: translate(-50%, -50%);
+  opacity: 0.55;
+  transition: opacity 0.12s, background 0.12s;
+}
+.terminal-dock-resize:hover::after,
+body.terminal-resizing .terminal-dock-resize::after {
+  background: var(--accent);
+  opacity: 1;
+}
+body.terminal-resizing {
+  cursor: ns-resize !important;
+  user-select: none;
+}
+body.terminal-resizing * {
+  cursor: ns-resize !important;
+}
+.terminal-dock-hdr {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.terminal-dock-close {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.terminal-dock-close:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.terminal-dock-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  background: #0a0d12;
+}
+.terminal-host-stack {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+  background: #0a0d12;
+}
+.terminal-host {
+  position: absolute;
+  inset: 0;
+  padding: 6px 8px 8px;
+  background: #0a0d12;
+  display: none;
+}
+.terminal-host.is-active {
+  display: block;
+}
+/* xterm.js mounts an absolutely-positioned screen inside .terminal .xterm-screen.
+   Make the .xterm wrapper fill the host so fit() measures correctly. */
+.terminal-host .xterm,
+.terminal-host .xterm-viewport,
+.terminal-host .xterm-screen {
+  width: 100% !important;
+  height: 100% !important;
+}
+.terminal-host .xterm-viewport {
+  background-color: transparent !important;
+}
+
+/* ── Tabs strip ── */
+.terminal-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+.terminal-tabs::-webkit-scrollbar {
+  height: 4px;
+}
+.terminal-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  position: relative;
+  transition: background 0.1s, color 0.1s, border-color 0.1s, opacity 0.1s;
+}
+.terminal-tab:hover {
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  color: var(--text);
+  border-color: var(--border);
+}
+.terminal-tab.is-active {
+  background: var(--canvas);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.terminal-tab.is-dead {
+  opacity: 0.55;
+  font-style: italic;
+}
+.terminal-tab.is-dragging {
+  opacity: 0.4;
+}
+.terminal-tab.drop-before::before,
+.terminal-tab.drop-after::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+.terminal-tab.drop-before::before { left: -3px; }
+.terminal-tab.drop-after::after  { right: -3px; }
+.terminal-tab-label {
+  pointer-events: none;
+  outline: none;
+}
+.terminal-tab-cwd {
+  pointer-events: none;
+  font-size: 10px;
+  color: var(--text-faint);
+  letter-spacing: 0.01em;
+  max-width: 16ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 4px;
+  border-left: 1px solid var(--border);
+}
+.terminal-tab.is-active .terminal-tab-cwd {
+  color: var(--text-muted);
+}
+.terminal-tab.is-renaming .terminal-tab-cwd {
+  display: none;
+}
+.terminal-tab.is-renaming {
+  background: var(--canvas);
+  border-color: var(--accent-dim);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.terminal-tab.is-renaming .terminal-tab-label {
+  pointer-events: auto;
+  caret-color: var(--accent);
+  cursor: text;
+  min-width: 1ch;
+}
+.terminal-tab.is-renaming .terminal-tab-x {
+  display: none;
+}
+.terminal-tab-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 0.1s, background 0.1s, color 0.1s;
+}
+.terminal-tab:hover .terminal-tab-x,
+.terminal-tab.is-active .terminal-tab-x {
+  opacity: 0.7;
+}
+.terminal-tab-x:hover {
+  opacity: 1 !important;
+  background: var(--surface-2, rgba(255, 255, 255, 0.08));
+  color: var(--text);
+}
+.terminal-tab-new {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.terminal-tab-new:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
 }
 

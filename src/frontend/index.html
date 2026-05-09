@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="theme.css">
 <link rel="stylesheet" href="markdown.css">
 <link rel="stylesheet" href="assets/highlight/hljs-theme.css">
+<link rel="stylesheet" href="assets/xterm/xterm.css">
 </head>
 <body>
 <div id="app">
@@ -18,6 +19,7 @@
   <div class="hdr">
     <div class="hdr-wordmark">Mimi · v1</div>
     <button type="button" class="gear-btn" onclick="goSettings()">Settings</button>
+    <button type="button" class="gear-btn" onclick="goHelp()" title="Open the user guide in a new window">Help</button>
   </div>
   <div class="setup-scroll">
 
@@ -86,9 +88,24 @@
     </button>
     <button class="badge-btn hdr-model-badge" id="model-badge" onclick="openModelPicker()">⇄ <span id="model-badge-txt">—</span></button>
     <button type="button" class="gear-btn" onclick="goSettings()">Settings</button>
+    <button type="button" class="gear-btn" onclick="goHelp()" title="Open the user guide in a new window">Help</button>
   </div>
 
   <div class="messages-area" id="messages-area"></div>
+
+  <div class="terminal-dock" id="terminal-dock" aria-hidden="true">
+    <div class="terminal-dock-resize" id="terminal-dock-resize" role="separator" aria-orientation="horizontal" aria-label="Resize terminal panel" title="Drag to resize"></div>
+    <div class="terminal-dock-hdr">
+      <div class="terminal-tabs" id="terminal-tabs" role="tablist" aria-label="Terminal tabs"></div>
+      <button type="button" class="terminal-tab-new" id="terminal-tab-new" onclick="newTerminalTab()" aria-label="New terminal tab"
+        title="New tab&#10;Ctrl+Shift+T  new tab&#10;Ctrl+Shift+W  close current tab&#10;Ctrl+PgUp/PgDn  switch tabs&#10;F2 or double-click  rename tab">+</button>
+      <button type="button" class="terminal-dock-close" id="terminal-dock-close" onclick="closeTerminalPanel()" aria-label="Close terminal panel"
+        title="Close terminal&#10;Ctrl+Shift+`  toggle terminal panel&#10;Esc  close panel">×</button>
+    </div>
+    <div class="terminal-dock-body">
+      <div class="terminal-host-stack" id="terminal-host-stack"></div>
+    </div>
+  </div>
 
   <div class="chat-dock" id="chat-dock">
     <div class="scroll-btn-row" id="scroll-btn-row">
@@ -100,6 +117,7 @@
     <div class="input-box">
       <div class="composer-dropdowns" id="composer-dropdowns">
         <div class="slash-popup" id="slash-popup"></div>
+        <div class="slash-popup at-popup" id="at-popup"></div>
         <div class="model-picker" id="model-picker">
           <div class="picker-hdr picker-hdr-split">
             <span>SELECT MODEL</span>
@@ -124,7 +142,7 @@
         role="textbox"
         aria-multiline="true"
         spellcheck="true"
-        data-placeholder="message  ·  / for commands  ·  shift+enter for newline"
+        data-placeholder="message  ·  / for commands  ·  @ for terminal snapshot  ·  shift+enter for newline"
         onkeydown="handleKey(event)"
         oninput="handleInput()"
         onpaste="handlePaste(event)"></div>
@@ -147,6 +165,7 @@
     <button class="back-btn" onclick="goBack()">← back</button>
     <div class="settings-title">settings</div>
     <button class="back-btn settings-devtools-btn" onclick="openDevTools()" title="Open Chromium DevTools attached to this window">DevTools</button>
+    <button type="button" class="gear-btn settings-help-btn" onclick="goHelp()" title="Open the user guide in a new window">Help</button>
   </div>
   <div class="stabs">
     <div class="stab active" onclick="switchTab('prompts',this)">System Prompts</div>
@@ -304,6 +323,8 @@ dist/
 <script src="assets/marked/marked.min.js"></script>
 <script src="assets/dompurify/purify.min.js"></script>
 <script src="assets/highlight/highlight.min.js"></script>
+<script src="assets/xterm/xterm.js"></script>
+<script src="assets/xterm/addon-fit.js"></script>
 <script>
 // ─── STORAGE BRIDGE ─────────────────────────
 // Python persists state under ~/.mimi-chat/. Paths cross the bridge in tilde
@@ -502,6 +523,21 @@ function applyHydratedState(blob) {
     ? ig.patterns.filter(s => typeof s === 'string')
     : [];
   IGNORE_DEFAULTS = Array.isArray(ig.defaults) ? ig.defaults.slice() : [];
+
+  // Terminal panel: restore stashed height + drawer-open state. Tabs themselves
+  // can't persist (PTY processes die with the app); we just bring back the
+  // shape of the panel so a user who keeps it open doesn't have to re-toggle
+  // and re-resize on every launch.
+  const term = (cfg && cfg.terminal) || {};
+  if (Number.isFinite(term.height) && term.height > 100) {
+    const dock = document.getElementById('terminal-dock');
+    if (dock) dock.style.height = term.height + 'px';
+  }
+  if (term.open === true) {
+    // Defer until after the rest of boot so xterm + tab creation don't race
+    // applyHydratedState's module-init paths.
+    setTimeout(() => { try { openTerminalPanel(); } catch (e) { console.warn(e); } }, 60);
+  }
 }
 
 // ─── DATA ───────────────────────────────────
@@ -627,6 +663,13 @@ let st = {
    * never silently re-enabled — only an explicit user action turns it back on.
    */
   followBottom: true,
+  /** Terminal drawer (Ctrl+Shift+T). Phase 1 skeleton — see openTerminalPanel(). */
+  terminalOpen: false,
+  /** @-mention picker for embedding terminal-buffer pills in the composer. */
+  atPickerOpen: false,
+  atPickerIdx: 0,
+  /** @type {null | {node: Text, atOffset: number, caretOffset: number, filter: string}} */
+  atTrigger: null,
 };
 
 /** Set immediately before any of our own programmatic scrolls; cleared shortly
@@ -1337,6 +1380,15 @@ function goSettings() {
   showScreen('settings');
 }
 function goBack() { showScreen(st.prevScreen); }
+function goHelp() {
+  // Help lives in a sibling pywebview window so users can keep it open while
+  // they explore. Falls back to a new browser tab when the bridge is missing
+  // (e.g. the page loaded outside pywebview).
+  if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.open_help_window === 'function') {
+    try { window.pywebview.api.open_help_window(); return; } catch (e) { console.error('open_help_window failed', e); }
+  }
+  try { window.open('help.html', '_blank'); } catch (e) { console.error(e); }
+}
 
 // ─── CHAT INPUT ────────────────────────────
 function handleKey(e) {
@@ -1396,6 +1448,19 @@ function handleKey(e) {
       e.preventDefault();
       const item = items[st.slashIdx];
       if (item) applySlash(item.dataset.cmd);
+      return;
+    }
+  }
+
+  if (st.atPickerOpen) {
+    const items = document.querySelectorAll('#at-popup .atpop-item');
+    if (e.key==='ArrowDown'){ e.preventDefault(); st.atPickerIdx=(st.atPickerIdx+1)%items.length; highlightAtPicker(); return; }
+    if (e.key==='ArrowUp')  { e.preventDefault(); st.atPickerIdx=(st.atPickerIdx-1+items.length)%items.length; highlightAtPicker(); return; }
+    if (e.key==='Escape')   { closeAtPicker(); return; }
+    if ((e.key==='Enter' && !e.shiftKey) || e.key==='Tab') {
+      e.preventDefault();
+      const item = items[st.atPickerIdx];
+      if (item) applyAtPick(item.dataset.tabId);
       return;
     }
   }
@@ -1707,12 +1772,21 @@ function handleInput() {
   const val = readEditorContent().text;
   if (val.startsWith('/') && val.length >= 1) {
     const hits = SLASH_CMDS.filter((c) => c.cmd.startsWith(val.toLowerCase()));
-    if (hits.length) { renderSlash(hits); return; }
+    if (hits.length) { closeAtPicker(); renderSlash(hits); return; }
   }
   closeSlash();
   if (!val.startsWith('/')) {
     if (st.pickerOpen) closeModelPicker();
     if (st.promptPickerOpen) closePromptPicker();
+  }
+  // @-trigger: open the terminal-tab picker when the caret sits in a bare
+  // @filter run (no whitespace between @ and caret, @ at start or after WS).
+  const trig = findAtTrigger();
+  if (trig) {
+    st.atTrigger = trig;
+    renderAtPicker(trig.filter);
+  } else {
+    closeAtPicker();
   }
 }
 
@@ -3881,12 +3955,14 @@ function resolveDropPosition(x, y, draggedPill) {
   const editor = getEditor();
   if (!editor) return null;
 
+  const isPillEl = (n) =>
+    n && n.nodeType === Node.ELEMENT_NODE && n.classList &&
+    (n.classList.contains('msg-img-pill') || n.classList.contains('terminal-pill'));
+
   const findPillAncestor = (node) => {
     let n = node;
     while (n && n !== editor) {
-      if (n.nodeType === Node.ELEMENT_NODE && n.classList && n.classList.contains('msg-img-pill')) {
-        return n;
-      }
+      if (isPillEl(n)) return n;
       n = n.parentNode;
     }
     return null;
@@ -3896,7 +3972,7 @@ function resolveDropPosition(x, y, draggedPill) {
   const el = document.elementFromPoint(x, y);
   let pill = null;
   if (el && editor.contains(el)) {
-    pill = el.closest ? el.closest('.msg-img-pill') : null;
+    pill = el.closest ? el.closest('.msg-img-pill, .terminal-pill') : null;
   }
   if (!pill) {
     const range = rangeFromPoint(x, y);
@@ -3910,7 +3986,12 @@ function resolveDropPosition(x, y, draggedPill) {
   }
   if (pill === draggedPill) return null;
   const r = pill.getBoundingClientRect();
-  const side = (x - r.left) < r.width / 2 ? 'before' : 'after';
+  // Terminal pills span the line; use top/bottom as the split. Image pills
+  // are inline-flex chips; use left/right.
+  const isBlock = pill.classList.contains('terminal-pill');
+  const side = isBlock
+    ? ((y - r.top) < r.height / 2 ? 'before' : 'after')
+    : ((x - r.left) < r.width / 2 ? 'before' : 'after');
   return { kind: 'sibling', target: pill, side };
 }
 
@@ -3925,7 +4006,12 @@ function showDropCaret(x, y) {
   let rect;
   if (pos.kind === 'sibling') {
     const r = pos.target.getBoundingClientRect();
-    rect = { left: pos.side === 'before' ? r.left : r.right, top: r.top, width: 0, height: r.height };
+    const isBlock = pos.target.classList.contains('terminal-pill');
+    if (isBlock) {
+      rect = { left: r.left, top: pos.side === 'before' ? r.top : r.bottom, width: r.width, height: 0, isBlock: true };
+    } else {
+      rect = { left: pos.side === 'before' ? r.left : r.right, top: r.top, width: 0, height: r.height };
+    }
   } else {
     rect = pos.range.getBoundingClientRect();
     if (!rect || (rect.height === 0 && rect.width === 0)) {
@@ -3949,11 +4035,19 @@ function showDropCaret(x, y) {
   }
   const editorStyle = window.getComputedStyle(editor);
   const lineH = parseFloat(editorStyle.lineHeight) || 22;
-  const h = Math.max(rect.height || lineH, lineH * 0.9);
   _dropCaretEl.style.display = 'block';
-  _dropCaretEl.style.left = `${rect.left}px`;
-  _dropCaretEl.style.top = `${rect.top}px`;
-  _dropCaretEl.style.height = `${h}px`;
+  if (rect.isBlock) {
+    _dropCaretEl.style.left = `${rect.left}px`;
+    _dropCaretEl.style.top = `${rect.top - 1}px`;
+    _dropCaretEl.style.width = `${rect.width}px`;
+    _dropCaretEl.style.height = `2px`;
+  } else {
+    const h = Math.max(rect.height || lineH, lineH * 0.9);
+    _dropCaretEl.style.left = `${rect.left}px`;
+    _dropCaretEl.style.top = `${rect.top}px`;
+    _dropCaretEl.style.width = `2px`;
+    _dropCaretEl.style.height = `${h}px`;
+  }
   return pos;
 }
 
@@ -4379,6 +4473,7 @@ function isEditorEffectivelyEmpty() {
   const editor = getEditor();
   if (!editor) return true;
   if (editor.querySelector('.msg-img-pill')) return false;
+  if (editor.querySelector('.terminal-pill')) return false;
   return editor.textContent.replace(/\u200B/g, '').length === 0;
 }
 
@@ -4511,6 +4606,17 @@ function _captureItems() {
       items.push({ k: 'p', id: parseInt(node.dataset.pillId, 10) });
       return;
     }
+    if (node.classList && node.classList.contains('terminal-pill')) {
+      const body = node.querySelector('.terminal-pill-body');
+      items.push({
+        k: 'tp',
+        id: parseInt(node.dataset.pillId, 10),
+        tabId: node.dataset.tabId || '',
+        tabName: node.dataset.tabName || 'terminal',
+        body: (body && body.textContent) || '',
+      });
+      return;
+    }
     if (node.tagName === 'BR') {
       items.push({ k: 'br' });
       return;
@@ -4527,6 +4633,7 @@ function _itemsEqual(a, b) {
     if (a[i].k !== b[i].k) return false;
     if (a[i].k === 't' && a[i].v !== b[i].v) return false;
     if (a[i].k === 'p' && a[i].id !== b[i].id) return false;
+    if (a[i].k === 'tp' && (a[i].id !== b[i].id || a[i].body !== b[i].body)) return false;
   }
   return true;
 }
@@ -4548,6 +4655,11 @@ function applyEditorState(state) {
       const blob = _pillBlobs.get(it.id);
       if (!blob) continue;
       editor.appendChild(buildImagePill(blob, it.id));
+    }
+    else if (it.k === 'tp') {
+      editor.appendChild(buildTerminalPill({
+        tabId: it.tabId, tabName: it.tabName, body: it.body, existingId: it.id,
+      }));
     }
   }
   editor.focus({ preventScroll: true });
@@ -4662,6 +4774,16 @@ function readEditorContent() {
       } else {
         console.warn('Dropping image pill with no associated data URL:', el.dataset.pillId);
       }
+      return;
+    }
+    if (el.classList && el.classList.contains('terminal-pill')) {
+      const tabName = el.dataset.tabName || 'terminal';
+      const body = el.querySelector('.terminal-pill-body');
+      const text = (body && body.textContent) || '';
+      if (buf && !buf.endsWith('\n')) buf += '\n';
+      buf += '```terminal (tab: ' + tabName + ')\n';
+      buf += text.replace(/\n+$/, '');
+      buf += '\n```\n';
       return;
     }
     if (el.tagName === 'BR') {
@@ -5802,6 +5924,7 @@ document.addEventListener('click', e => {
   if (!e.target.closest('#model-picker') && !e.target.closest('#model-badge')) closeModelPicker();
   if (!e.target.closest('#prompt-picker') && !e.target.closest('#prompt-badge')) closePromptPicker();
   if (!e.target.closest('#slash-popup') && !e.target.closest('#msg-input')) closeSlash();
+  if (!e.target.closest('#at-popup') && !e.target.closest('#msg-input')) closeAtPicker();
   if (!e.target.closest('#prompt-dd-wrap')) closePromptDD();
   if (!e.target.closest('#prompt-tpl-wrap')) closePromptTemplatesDD();
 });
@@ -5835,13 +5958,872 @@ document.addEventListener('keydown', (e) => {
 });
 
 // Suppressed while the tool-perm modal is open so its own Ctrl+Enter /
-// Esc / Alt+Esc bindings stay unambiguous.
+// Esc / Alt+Esc bindings stay unambiguous. Also suppressed when the terminal
+// panel owns focus — the terminal needs every key (Tab, Ctrl+C, arrows, …).
 function chatHotkeyAvailable() {
   const chat = document.getElementById('screen-chat');
   if (!chat || !chat.classList.contains('active')) return false;
   const ov = document.getElementById('tool-perm-overlay');
   if (ov && ov.classList.contains('open')) return false;
+  if (terminalHasFocus()) return false;
   return true;
+}
+
+function terminalHasFocus() {
+  if (!st.terminalOpen) return false;
+  const dock = document.getElementById('terminal-dock');
+  if (!dock) return false;
+  const a = document.activeElement;
+  return !!(a && dock.contains(a));
+}
+
+function openTerminalPanel() {
+  const dock = document.getElementById('terminal-dock');
+  if (!dock) return;
+  st.terminalOpen = true;
+  dock.classList.add('open');
+  dock.setAttribute('aria-hidden', 'false');
+  _persistTerminalDockState();
+  ensureTerminalReady().then(() => {
+    const tab = _activeTab();
+    if (!tab) return;
+    // Defer focus + fit so the slide-up transform has settled and the host
+    // measures with its real height.
+    setTimeout(() => {
+      fitTab(tab);
+      if (tab.term) tab.term.focus();
+    }, 200);
+  }).catch((err) => {
+    console.warn('terminal start failed:', err);
+  });
+}
+
+function closeTerminalPanel() {
+  const dock = document.getElementById('terminal-dock');
+  if (!dock) return;
+  st.terminalOpen = false;
+  dock.classList.remove('open');
+  dock.setAttribute('aria-hidden', 'true');
+  _persistTerminalDockState();
+  // Hand focus back to the composer if it's available.
+  const editor = typeof getEditor === 'function' ? getEditor() : null;
+  if (editor) editor.focus({ preventScroll: true });
+}
+
+let _persistTerminalDockTimer = 0;
+/** Debounced write of terminal-panel state to ~/.mimi-chat/config.json. */
+function _persistTerminalDockState() {
+  clearTimeout(_persistTerminalDockTimer);
+  _persistTerminalDockTimer = setTimeout(() => {
+    if (!mimiApi || !mimiApi.has || !mimiApi.has()) return;
+    const dock = document.getElementById('terminal-dock');
+    let height = null;
+    if (dock) {
+      const inline = dock.style.height;
+      if (inline && inline.endsWith('px')) {
+        const n = parseFloat(inline);
+        if (Number.isFinite(n) && n > 0) height = Math.round(n);
+      }
+    }
+    mimiApi.saveConfig({ terminal: { open: !!st.terminalOpen, height } });
+  }, 250);
+}
+
+function toggleTerminalPanel() {
+  if (st.terminalOpen) closeTerminalPanel();
+  else openTerminalPanel();
+}
+
+// Drag-to-resize on the top edge. Session-only state; persistence can move
+// into the config in a later phase.
+(function bindTerminalResize() {
+  const dock = document.getElementById('terminal-dock');
+  const grip = document.getElementById('terminal-dock-resize');
+  if (!dock || !grip) return;
+
+  const MIN_PX = 160;
+  const maxPx = () => Math.max(MIN_PX + 40, Math.round(window.innerHeight * 0.9));
+
+  let dragging = false;
+  let startY = 0;
+  let startH = 0;
+
+  const onMove = (e) => {
+    if (!dragging) return;
+    const dy = startY - e.clientY; // dragging up grows the panel
+    const next = Math.min(maxPx(), Math.max(MIN_PX, startH + dy));
+    dock.style.height = next + 'px';
+  };
+  const onUp = () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove('terminal-resizing');
+    window.removeEventListener('mousemove', onMove);
+    window.removeEventListener('mouseup', onUp);
+    _persistTerminalDockState();
+  };
+
+  grip.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    dragging = true;
+    startY = e.clientY;
+    startH = dock.getBoundingClientRect().height;
+    document.body.classList.add('terminal-resizing');
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  });
+
+  // Double-click the grip to reset to default.
+  grip.addEventListener('dblclick', () => {
+    dock.style.height = '';
+    _persistTerminalDockState();
+  });
+})();
+
+// ── Terminal tabs (xterm.js ↔ PTY) ───────────────────────────────────────
+// Each tab owns its own Terminal instance, host element, and PTY session.
+// Tabs are listed in `_tabs`; one is the active tab whose host is visible.
+// The drain loop is shared and pulls output from every live session each tick.
+
+/** @type {{ id: string, label: string, sessionId: string|null, term: any, fit: any, host: HTMLElement, resizeObs: any, dead: boolean, customLabel: boolean }[]} */
+const _tabs = [];
+let _activeTabId = null;
+let _tabIdSeq = 0;
+let _tabCounter = 0;
+let _drainTimer = 0;
+let _draining = false;
+let _renamingTabId = null;
+let _renderTabsPending = false;
+
+const _b64Encoder = new TextEncoder();
+
+function _bytesToB64(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s);
+}
+function _b64ToBytes(b64) {
+  const s = atob(b64 || '');
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+  return out;
+}
+function _strToB64Utf8(str) {
+  return _bytesToB64(_b64Encoder.encode(str));
+}
+
+function _getTab(id) {
+  return _tabs.find((t) => t.id === id) || null;
+}
+function _activeTab() {
+  return _getTab(_activeTabId);
+}
+
+async function ensureTerminalReady() {
+  if (_tabs.length === 0) {
+    await createTerminalTab();
+  } else if (!_activeTabId) {
+    setActiveTab(_tabs[0].id);
+  }
+}
+
+async function createTerminalTab() {
+  if (typeof Terminal === 'undefined') throw new Error('xterm.js not loaded');
+  const stack = document.getElementById('terminal-host-stack');
+  if (!stack) throw new Error('terminal-host-stack missing');
+
+  const id = 'tab-' + (++_tabIdSeq);
+  const label = 'term ' + (++_tabCounter);
+  const host = document.createElement('div');
+  host.className = 'terminal-host';
+  host.dataset.tabId = id;
+  stack.appendChild(host);
+
+  const term = new Terminal({
+    cursorBlink: true,
+    fontFamily: 'JetBrains Mono, ui-monospace, Menlo, Consolas, monospace',
+    fontSize: 13,
+    lineHeight: 1.15,
+    scrollback: 100000,
+    allowProposedApi: true,
+    theme: {
+      background: '#0a0d12',
+      foreground: '#d6deea',
+      cursor: '#9bd1ff',
+      cursorAccent: '#0a0d12',
+      selectionBackground: '#264f78',
+    },
+  });
+  const fit = (typeof FitAddon !== 'undefined' && FitAddon.FitAddon)
+    ? new FitAddon.FitAddon() : null;
+  if (fit) term.loadAddon(fit);
+  term.open(host);
+
+  const tab = {
+    id, label, sessionId: null, term, fit, host,
+    resizeObs: null, dead: false, customLabel: false,
+    cwd: '',
+  };
+  _tabs.push(tab);
+
+  term.onData((data) => {
+    if (!tab.sessionId) return;
+    window.pywebview.api.terminal_write(tab.sessionId, _strToB64Utf8(data));
+  });
+  term.onResize(({ cols, rows }) => {
+    if (!tab.sessionId) return;
+    window.pywebview.api.terminal_resize(tab.sessionId, cols, rows);
+  });
+  // OSC title sequences (e.g. `printf '\e]0;label\a'`) rename the tab unless
+  // the user has set a custom label by double-clicking it.
+  if (term.onTitleChange) {
+    term.onTitleChange((title) => {
+      const t = (title || '').trim();
+      if (!t || tab.customLabel) return;
+      tab.label = t.length > 32 ? t.slice(0, 31) + '…' : t;
+      _renderTabs();
+    });
+  }
+
+  setActiveTab(id);
+  _renderTabs();
+
+  // Fit after the host is visible so dimensions are real, then start PTY.
+  await new Promise((r) => setTimeout(r, 0));
+  fitTab(tab);
+  let cols = term.cols, rows = term.rows;
+
+  const cwd = (st && st.projectDir) ? st.projectDir : null;
+  try {
+    const sid = await window.pywebview.api.terminal_start(cols, rows, cwd);
+    tab.sessionId = sid;
+  } catch (err) {
+    console.warn('terminal_start failed:', err);
+    tab.dead = true;
+    if (term) term.write('\r\n\x1b[2m[failed to start shell]\x1b[0m\r\n');
+    _renderTabs();
+    return tab;
+  }
+
+  if (typeof ResizeObserver !== 'undefined') {
+    tab.resizeObs = new ResizeObserver(() => fitTab(tab));
+    tab.resizeObs.observe(host);
+  }
+
+  _ensureDrainLoop();
+  return tab;
+}
+
+function setActiveTab(id) {
+  const tab = _getTab(id);
+  if (!tab) return;
+  _activeTabId = id;
+  for (const t of _tabs) {
+    t.host.classList.toggle('is-active', t.id === id);
+  }
+  _renderTabs();
+  // Fit and focus the newly active tab. Defer fit so the show transition has
+  // applied (display:none → block) before measuring. Skip the term focus
+  // when an inline rename is active — the editable label owns focus.
+  setTimeout(() => {
+    fitTab(tab);
+    if (tab.term && st.terminalOpen && !_renamingTabId) tab.term.focus();
+  }, 0);
+}
+
+function fitTab(tab) {
+  if (!tab || !tab.term || !tab.fit) return;
+  if (!tab.host || tab.host.clientHeight < 24 || tab.host.clientWidth < 24) return;
+  try { tab.fit.fit(); } catch {}
+}
+
+function newTerminalTab() {
+  createTerminalTab().catch((err) => console.warn('createTerminalTab:', err));
+}
+
+function closeTerminalTab(id) {
+  const idx = _tabs.findIndex((t) => t.id === id);
+  if (idx < 0) return;
+  const tab = _tabs[idx];
+  if (tab.resizeObs) { try { tab.resizeObs.disconnect(); } catch {} }
+  if (tab.sessionId) {
+    try { window.pywebview.api.terminal_kill(tab.sessionId); } catch {}
+  }
+  if (tab.term) { try { tab.term.dispose(); } catch {} }
+  if (tab.host && tab.host.parentNode) tab.host.parentNode.removeChild(tab.host);
+  _tabs.splice(idx, 1);
+
+  if (_tabs.length === 0) {
+    _activeTabId = null;
+    if (st.terminalOpen) {
+      // Always keep at least one live tab while the panel is open.
+      newTerminalTab();
+    }
+  } else if (_activeTabId === id) {
+    const next = _tabs[Math.min(idx, _tabs.length - 1)];
+    setActiveTab(next.id);
+  } else {
+    _renderTabs();
+  }
+}
+
+function _ensureDrainLoop() {
+  if (_drainTimer) return;
+  _drainTimer = setInterval(async () => {
+    if (_draining || _tabs.length === 0) return;
+    const live = _tabs.filter((t) => t.sessionId);
+    if (!live.length) return;
+    _draining = true;
+    try {
+      const results = await Promise.all(live.map((t) =>
+        window.pywebview.api.terminal_drain(t.sessionId).then((r) => [t, r]).catch(() => [t, null])
+      ));
+      let needTabRender = false;
+      for (const [t, res] of results) {
+        if (!res) continue;
+        if (res.data) {
+          const bytes = _b64ToBytes(res.data);
+          if (t.term) t.term.write(bytes);
+        }
+        if (res.closed && !t.dead) {
+          t.dead = true;
+          t.sessionId = null;
+          if (t.term) t.term.write('\r\n\x1b[2m[session ended — × to close tab, + for new shell]\x1b[0m\r\n');
+          needTabRender = true;
+        }
+        if (typeof res.cwd === 'string' && res.cwd !== t.cwd) {
+          t.cwd = res.cwd;
+          needTabRender = true;
+        }
+      }
+      if (needTabRender) _renderTabs();
+    } finally {
+      _draining = false;
+    }
+  }, 24);
+}
+
+function _renderTabs() {
+  // Suppress redraws while an inline rename is in progress — innerHTML='' would
+  // discard the contenteditable label mid-edit. The pending flag drives a
+  // single redraw once the rename commits/cancels.
+  if (_renamingTabId) { _renderTabsPending = true; return; }
+  const strip = document.getElementById('terminal-tabs');
+  if (!strip) return;
+  strip.innerHTML = '';
+  for (const t of _tabs) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'terminal-tab' + (t.id === _activeTabId ? ' is-active' : '') + (t.dead ? ' is-dead' : '');
+    btn.dataset.tabId = t.id;
+    btn.draggable = true;
+    btn.setAttribute('role', 'tab');
+    btn.setAttribute('aria-selected', t.id === _activeTabId ? 'true' : 'false');
+    const cwdShort = _formatCwdForTab(t.cwd);
+    btn.title = t.dead
+      ? `${t.label} (ended)${t.cwd ? '\n' + t.cwd : ''}`
+      : (t.cwd ? `${t.label}\n${t.cwd}` : t.label);
+
+    const lbl = document.createElement('span');
+    lbl.className = 'terminal-tab-label';
+    lbl.textContent = t.label;
+    btn.appendChild(lbl);
+
+    if (cwdShort) {
+      const cwd = document.createElement('span');
+      cwd.className = 'terminal-tab-cwd';
+      cwd.textContent = cwdShort;
+      btn.appendChild(cwd);
+    }
+
+    const x = document.createElement('span');
+    x.className = 'terminal-tab-x';
+    x.textContent = '×';
+    x.title = 'Close tab';
+    x.addEventListener('mousedown', (e) => e.stopPropagation());
+    x.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      closeTerminalTab(t.id);
+    });
+    btn.appendChild(x);
+
+    btn.addEventListener('click', () => setActiveTab(t.id));
+    btn.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      startRenameTab(t.id);
+    });
+
+    // Drag-to-reorder.
+    btn.addEventListener('dragstart', (e) => {
+      e.dataTransfer.effectAllowed = 'move';
+      try { e.dataTransfer.setData('text/x-mimi-tab', t.id); } catch {}
+      btn.classList.add('is-dragging');
+    });
+    btn.addEventListener('dragend', () => btn.classList.remove('is-dragging'));
+    btn.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      const r = btn.getBoundingClientRect();
+      const before = (e.clientX - r.left) < r.width / 2;
+      btn.classList.toggle('drop-before', before);
+      btn.classList.toggle('drop-after', !before);
+    });
+    btn.addEventListener('dragleave', () => {
+      btn.classList.remove('drop-before', 'drop-after');
+    });
+    btn.addEventListener('drop', (e) => {
+      e.preventDefault();
+      btn.classList.remove('drop-before', 'drop-after');
+      const draggedId = e.dataTransfer.getData('text/x-mimi-tab');
+      if (!draggedId || draggedId === t.id) return;
+      const r = btn.getBoundingClientRect();
+      const before = (e.clientX - r.left) < r.width / 2;
+      _reorderTab(draggedId, t.id, before);
+    });
+
+    strip.appendChild(btn);
+  }
+}
+
+/** Render a compact cwd badge for a tab strip. Collapses $HOME to ~ and shows
+ *  just the trailing segment (the basename) when the path is deep. Empty in →
+ *  empty out, so the caller can skip rendering the badge entirely. */
+function _formatCwdForTab(cwd) {
+  if (!cwd) return '';
+  let p = String(cwd);
+  if (HOME_DIR && (p === HOME_DIR || p.startsWith(HOME_DIR + '/'))) {
+    p = '~' + p.slice(HOME_DIR.length);
+  }
+  if (p === '/' || p === '~') return p;
+  const segs = p.split('/').filter(Boolean);
+  const tail = segs[segs.length - 1] || p;
+  return tail.length > 22 ? tail.slice(0, 21) + '…' : tail;
+}
+
+function _reorderTab(srcId, refId, before) {
+  const si = _tabs.findIndex((t) => t.id === srcId);
+  if (si < 0) return;
+  const [src] = _tabs.splice(si, 1);
+  let ri = _tabs.findIndex((t) => t.id === refId);
+  if (ri < 0) ri = _tabs.length;
+  _tabs.splice(before ? ri : ri + 1, 0, src);
+  _renderTabs();
+}
+
+function startRenameTab(id) {
+  if (_renamingTabId) return;
+  const tab = _getTab(id);
+  if (!tab) return;
+  // Switch to the tab so the user sees what they're naming.
+  if (_activeTabId !== id) setActiveTab(id);
+  _renamingTabId = id;
+  // Force a refresh now that the flag is set; we want the latest DOM to
+  // attach the editor to. _renderTabs short-circuits on _renamingTabId, so
+  // call it before flipping the flag.
+  // (Already called by setActiveTab. The strip is current.)
+  const btn = document.querySelector('.terminal-tab[data-tab-id="' + id + '"]');
+  if (!btn) { _renamingTabId = null; return; }
+  const lbl = btn.querySelector('.terminal-tab-label');
+  if (!lbl) { _renamingTabId = null; return; }
+
+  btn.classList.add('is-renaming');
+  btn.draggable = false;
+  lbl.contentEditable = 'true';
+  lbl.spellcheck = false;
+  // Override the no-pointer-events the label normally has so the caret lands.
+  lbl.style.pointerEvents = 'auto';
+
+  const range = document.createRange();
+  range.selectNodeContents(lbl);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  lbl.focus({ preventScroll: true });
+
+  let done = false;
+  const finish = (committed) => {
+    if (done) return;
+    done = true;
+    if (committed) {
+      const next = (lbl.textContent || '').replace(/\s+/g, ' ').trim();
+      if (next) {
+        tab.label = next.length > 32 ? next.slice(0, 31) + '…' : next;
+        tab.customLabel = true;
+      }
+    }
+    _renamingTabId = null;
+    const wasPending = _renderTabsPending;
+    _renderTabsPending = false;
+    _renderTabs();
+    if (!wasPending) {
+      // _renderTabs above already redrew this row; nothing else needed.
+    }
+    // Hand focus back to the terminal so typing continues to land in bash.
+    if (st.terminalOpen) {
+      const at = _activeTab();
+      if (at && at.term) at.term.focus();
+    }
+  };
+
+  lbl.addEventListener('keydown', (e) => {
+    // Block these from reaching global hotkey handlers — when the user types
+    // 'T' or 'W' as part of a label, we don't want to trigger Ctrl+Shift+...
+    // (those already check _renamingTabId, but stop propagation defensively).
+    e.stopPropagation();
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      finish(true);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      finish(false);
+    }
+  }, true);
+  lbl.addEventListener('blur', () => finish(true), { once: true });
+  // Don't let a click on the label itself bubble up to the tab's click handler
+  // (which would call setActiveTab and refocus the term).
+  lbl.addEventListener('click', (e) => e.stopPropagation());
+}
+
+function switchTerminalTab(direction) {
+  if (_tabs.length < 2) return;
+  let idx = _tabs.findIndex((t) => t.id === _activeTabId);
+  if (idx < 0) idx = 0;
+  const next = (idx + direction + _tabs.length) % _tabs.length;
+  setActiveTab(_tabs[next].id);
+}
+
+window.addEventListener('resize', () => {
+  for (const t of _tabs) fitTab(t);
+});
+
+// ── @terminal pills ─────────────────────────────────────────────────────────
+// User types `@` in the composer; a popup lists current tabs. Picking one
+// inserts a pill atom holding a snapshot of that tab's xterm buffer. The
+// snapshot is editable inline (for redaction), and the pill serializes to a
+// fenced ```terminal block in the outgoing message.
+
+let _termPillIdSeq = 0;
+
+/** Walk an xterm Terminal's active buffer and return its visible+scrollback
+ *  text. Trailing blank lines are stripped so we don't trail a screenful of
+ *  empty rows when the shell hasn't filled the viewport. */
+function snapshotTerminalBuffer(tab) {
+  if (!tab || !tab.term || !tab.term.buffer) return '';
+  const buf = tab.term.buffer.active;
+  const lines = [];
+  for (let i = 0; i < buf.length; i++) {
+    const ln = buf.getLine(i);
+    if (!ln) continue;
+    lines.push(ln.translateToString(true));
+  }
+  while (lines.length && lines[lines.length - 1] === '') lines.pop();
+  return lines.join('\n');
+}
+
+/** Token-count badge formatting per the design: <1k → "108-tok",
+ *  ≥1k → "1.5k-tok", ≥1m → "1.2m-tok". One decimal under 10 of each unit,
+ *  rounded otherwise — the exact value is less interesting than the order. */
+function formatTokForPill(n) {
+  const x = Math.max(0, Math.round(n));
+  if (x >= 1e6) {
+    const m = x / 1e6;
+    return (m >= 10 ? Math.round(m).toString() : m.toFixed(1).replace(/\.0$/, '')) + 'm-tok';
+  }
+  if (x >= 1000) {
+    const k = x / 1000;
+    return (k >= 10 ? Math.round(k).toString() : k.toFixed(1).replace(/\.0$/, '')) + 'k-tok';
+  }
+  return x + '-tok';
+}
+
+/** Inspect the caret. Return a trigger descriptor when the caret is in a bare
+ *  @-run (i.e. an `@` followed by zero or more non-whitespace chars, with no
+ *  whitespace between `@` and the caret, and `@` either at start of the text
+ *  node or preceded by whitespace). */
+function findAtTrigger() {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return null;
+  const r = sel.getRangeAt(0);
+  if (!r.collapsed) return null;
+  const editor = getEditor();
+  if (!editor || !editor.contains(r.startContainer)) return null;
+  // Reject when caret has crawled inside a pill (the contenteditable terminal
+  // body is editable, but @-mentions there should not retrigger the picker).
+  for (let n = r.startContainer; n && n !== editor; n = n.parentNode) {
+    if (n.nodeType === Node.ELEMENT_NODE && n.classList &&
+        (n.classList.contains('msg-img-pill') || n.classList.contains('terminal-pill'))) {
+      return null;
+    }
+  }
+  if (r.startContainer.nodeType !== Node.TEXT_NODE) return null;
+  const node = /** @type {Text} */ (r.startContainer);
+  const off = r.startOffset;
+  const text = node.nodeValue || '';
+  let i = off - 1;
+  while (i >= 0) {
+    const ch = text.charCodeAt(i);
+    if (ch === 0x40 /* @ */) {
+      if (i === 0 || /\s/.test(text[i - 1])) {
+        return { node, atOffset: i, caretOffset: off, filter: text.slice(i + 1, off) };
+      }
+      return null;
+    }
+    if (ch === 0x20 || ch === 0x09 || ch === 0x0A) return null;
+    i--;
+  }
+  return null;
+}
+
+function renderAtPicker(filter) {
+  const popup = document.getElementById('at-popup');
+  if (!popup) return;
+  const f = (filter || '').toLowerCase();
+  // Match by label (case-insensitive substring) so the user can disambiguate
+  // tabs after they've been renamed.
+  const matches = _tabs.filter((t) => t.label.toLowerCase().includes(f));
+  if (!matches.length) { closeAtPicker(); return; }
+  popup.innerHTML = '';
+  st.atPickerIdx = 0;
+  matches.forEach((t, i) => {
+    const item = document.createElement('div');
+    item.className = 'slash-item atpop-item' + (i === 0 ? ' hi' : '');
+    item.dataset.tabId = t.id;
+
+    const cmd = document.createElement('span');
+    cmd.className = 'slash-cmd-n atpop-name';
+    cmd.textContent = '@' + t.label;
+    item.appendChild(cmd);
+
+    const desc = document.createElement('span');
+    desc.className = 'slash-desc atpop-desc';
+    desc.textContent = t.dead ? 'session ended — buffer still snapshottable' : 'live terminal';
+    item.appendChild(desc);
+
+    const hint = document.createElement('span');
+    hint.className = 'slash-hint';
+    hint.textContent = '↵';
+    item.appendChild(hint);
+
+    item.addEventListener('mousedown', (e) => e.preventDefault());
+    item.addEventListener('click', () => applyAtPick(t.id));
+    popup.appendChild(item);
+  });
+  popup.classList.add('open');
+  st.atPickerOpen = true;
+}
+
+function highlightAtPicker() {
+  document.querySelectorAll('#at-popup .atpop-item').forEach((it, i) => {
+    const on = i === st.atPickerIdx;
+    it.classList.toggle('hi', on);
+    if (on) it.scrollIntoView({ block: 'nearest' });
+  });
+}
+
+function closeAtPicker() {
+  const popup = document.getElementById('at-popup');
+  if (popup) {
+    popup.classList.remove('open');
+    popup.innerHTML = '';
+  }
+  st.atPickerOpen = false;
+  st.atPickerIdx = 0;
+  st.atTrigger = null;
+}
+
+function applyAtPick(tabId) {
+  const tab = _getTab(tabId);
+  const trigger = st.atTrigger;
+  closeAtPicker();
+  if (!tab) return;
+  const editor = getEditor();
+  if (!editor) return;
+  editor.focus({ preventScroll: true });
+  // Delete the @filter run, then place the caret at the slot the @ used to occupy
+  // and insert the pill there.
+  if (trigger && trigger.node && editor.contains(trigger.node)) {
+    const r = document.createRange();
+    const len = trigger.node.length;
+    r.setStart(trigger.node, Math.min(trigger.atOffset, len));
+    r.setEnd(trigger.node, Math.min(trigger.caretOffset, len));
+    r.deleteContents();
+    const sel = window.getSelection();
+    if (sel) {
+      const after = document.createRange();
+      after.setStart(trigger.node, Math.min(trigger.atOffset, trigger.node.length));
+      after.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(after);
+    }
+  }
+  const pill = buildTerminalPill({ tab });
+  insertNodeAtSelection(pill);
+  commitHistory();
+  updateEditorEmpty();
+  updateContextBadge();
+}
+
+/** Build a terminal-snapshot pill node. Either pass `tab` (live tab → snapshot
+ *  is taken now) or `tabId/tabName/body` (history restore — body is reused
+ *  verbatim). `existingId` reuses an id from a prior history snapshot. */
+function buildTerminalPill(opts) {
+  const tab = opts.tab || null;
+  const id = opts.existingId != null ? opts.existingId : ++_termPillIdSeq;
+  if (id > _termPillIdSeq) _termPillIdSeq = id;
+
+  const tabId = tab ? tab.id : (opts.tabId || '');
+  const tabName = tab ? tab.label : (opts.tabName || 'terminal');
+  const initialBody = opts.body != null
+    ? String(opts.body)
+    : (tab ? snapshotTerminalBuffer(tab) : '');
+
+  const pill = document.createElement('span');
+  pill.className = 'terminal-pill';
+  pill.contentEditable = 'false';
+  pill.draggable = true;
+  pill.dataset.pillId = String(id);
+  pill.dataset.tabId = tabId;
+  pill.dataset.tabName = tabName;
+  pill.title = `@${tabName} · terminal snapshot · drag header to move · click body to redact`;
+
+  const hdr = document.createElement('span');
+  hdr.className = 'terminal-pill-hdr';
+  hdr.contentEditable = 'false';
+
+  const icon = document.createElement('span');
+  icon.className = 'terminal-pill-icon';
+  icon.textContent = '⌨';
+  hdr.appendChild(icon);
+
+  const lbl = document.createElement('span');
+  lbl.className = 'terminal-pill-label';
+  lbl.textContent = '@' + tabName;
+  hdr.appendChild(lbl);
+
+  const tok = document.createElement('span');
+  tok.className = 'terminal-pill-tok';
+  tok.textContent = formatTokForPill(roughTok(initialBody));
+  hdr.appendChild(tok);
+
+  const refresh = document.createElement('button');
+  refresh.type = 'button';
+  refresh.className = 'terminal-pill-refresh';
+  refresh.title = 'Re-snapshot from live terminal';
+  refresh.setAttribute('aria-label', 'Refresh from live terminal');
+  refresh.textContent = '↻';
+  hdr.appendChild(refresh);
+
+  const rm = document.createElement('button');
+  rm.type = 'button';
+  rm.className = 'terminal-pill-rm';
+  rm.title = 'Remove';
+  rm.setAttribute('aria-label', 'Remove terminal pill');
+  rm.textContent = '×';
+  hdr.appendChild(rm);
+
+  pill.appendChild(hdr);
+
+  const pre = document.createElement('pre');
+  pre.className = 'terminal-pill-body';
+  pre.contentEditable = 'true';
+  pre.spellcheck = false;
+  // Don't let drags initiated inside the editable body trigger pill-drag.
+  // Chromium otherwise inherits draggable=true from the outer span and a
+  // text-selection drag in the body would relocate the whole pill.
+  pre.draggable = false;
+  pre.textContent = initialBody;
+  pill.appendChild(pre);
+
+  bindTerminalPillHandlers(pill);
+  return pill;
+}
+
+function _refreshTerminalPillTok(pill) {
+  const body = pill.querySelector('.terminal-pill-body');
+  const tok = pill.querySelector('.terminal-pill-tok');
+  if (!body || !tok) return;
+  tok.textContent = formatTokForPill(roughTok(body.textContent || ''));
+}
+
+function bindTerminalPillHandlers(pill) {
+  if (pill.__mimiTermBound) return;
+  pill.__mimiTermBound = true;
+  const refresh = pill.querySelector('.terminal-pill-refresh');
+  const rm = pill.querySelector('.terminal-pill-rm');
+  const body = pill.querySelector('.terminal-pill-body');
+
+  if (refresh) {
+    refresh.addEventListener('mousedown', (e) => e.preventDefault());
+    refresh.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const tab = _getTab(pill.dataset.tabId || '');
+      if (!tab || !body) return;
+      body.textContent = snapshotTerminalBuffer(tab);
+      _refreshTerminalPillTok(pill);
+      commitHistory();
+      updateContextBadge();
+    });
+  }
+  if (rm) {
+    rm.addEventListener('mousedown', (e) => e.preventDefault());
+    rm.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      pill.remove();
+      commitHistory();
+      updateEditorEmpty();
+      updateContextBadge();
+    });
+  }
+  if (body) {
+    body.addEventListener('input', () => {
+      _refreshTerminalPillTok(pill);
+      scheduleTypingCommit();
+      updateContextBadge();
+    });
+    // Stop the composer's handleKey from intercepting Enter / Tab / Esc /
+    // arrow-nav / Shift+Enter while the user redacts the snapshot.
+    body.addEventListener('keydown', (e) => e.stopPropagation());
+    // Force plain-text paste — the body is contenteditable, so a default paste
+    // would inject HTML formatting that mangles the monospace snapshot.
+    body.addEventListener('paste', (e) => {
+      if (!e.clipboardData) return;
+      e.preventDefault();
+      const text = e.clipboardData.getData('text/plain') || '';
+      try { document.execCommand('insertText', false, text); }
+      catch { body.textContent = (body.textContent || '') + text; }
+      _refreshTerminalPillTok(pill);
+      scheduleTypingCommit();
+      updateContextBadge();
+    });
+  }
+
+  // Reuse the editor's pill-drop infrastructure (_draggedPill, isPillDrag).
+  // The drop handler already routes by `_draggedPill` reference, so terminal
+  // pills get the same sibling-snap/range-insertion behavior as image pills.
+  pill.addEventListener('dragstart', (e) => {
+    // If the drag started inside the editable body (e.g. text-selection drag),
+    // bail — Chromium sometimes still bubbles up to the pill as draggable.
+    if (body && e.target && body.contains(e.target)) {
+      e.preventDefault();
+      return;
+    }
+    _draggedPill = pill;
+    pill.classList.add('is-dragging');
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move';
+      try { e.dataTransfer.setData('application/x-mimi-pill', '1'); } catch {}
+    }
+  });
+  pill.addEventListener('dragend', () => {
+    pill.classList.remove('is-dragging');
+    _draggedPill = null;
+    hideDropCaret();
+    updateEditorEmpty();
+    updateContextBadge();
+  });
 }
 
 // Ctrl/Cmd+P: toggle the system prompt picker.
@@ -5862,6 +6844,92 @@ document.addEventListener('keydown', (e) => {
   e.preventDefault();
   toggleThink();
 });
+
+// Terminal hotkey hub — all bound at capture phase so they fire while xterm
+// has focus. Each handler checks `_renamingTabId` and bails when an inline
+// tab-rename is in progress so the user can type freely in the label field.
+function _termHotkeyChatActive() {
+  const chat = document.getElementById('screen-chat');
+  if (!chat || !chat.classList.contains('active')) return false;
+  const ov = document.getElementById('tool-perm-overlay');
+  if (ov && ov.classList.contains('open')) return false;
+  return true;
+}
+
+// Ctrl/Cmd+Shift+` (Backquote): toggle the terminal panel.
+document.addEventListener('keydown', (e) => {
+  if (e.code !== 'Backquote') return;
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || !e.shiftKey) return;
+  if (!_termHotkeyChatActive()) return;
+  if (_renamingTabId) return;
+  e.preventDefault();
+  e.stopPropagation();
+  toggleTerminalPanel();
+}, true);
+
+// Ctrl/Cmd+Shift+T: new tab (only when the panel is open).
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 't' && e.key !== 'T') return;
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || !e.shiftKey) return;
+  if (!_termHotkeyChatActive()) return;
+  if (!st.terminalOpen) return;
+  if (_renamingTabId) return;
+  e.preventDefault();
+  e.stopPropagation();
+  newTerminalTab();
+}, true);
+
+// Ctrl/Cmd+Shift+W: close current tab.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'w' && e.key !== 'W') return;
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || !e.shiftKey) return;
+  if (!_termHotkeyChatActive()) return;
+  if (!st.terminalOpen) return;
+  if (_renamingTabId) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (_activeTabId) closeTerminalTab(_activeTabId);
+}, true);
+
+// Cycle tabs:
+//   • Ctrl/Cmd+PageUp / PageDown        (Linux/Windows convention; works on Mac too)
+//   • Cmd+Shift+[  / Cmd+Shift+]        (mac convention — Mac laptops lack physical
+//                                        PageUp/PageDown, and this matches iTerm,
+//                                        Terminal.app, Safari, Chrome, Slack, etc.)
+// Use e.code for the brackets so non-US keyboard layouts hit the same physical keys.
+// No conflict with the settings-tab versions of these combos — those handlers bail
+// unless the settings screen is active, and ours require the terminal panel to be
+// open on the chat screen.
+document.addEventListener('keydown', (e) => {
+  let dir = 0;
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+    if (e.key === 'PageUp')        dir = -1;
+    else if (e.key === 'PageDown') dir = 1;
+  }
+  if (e.metaKey && e.shiftKey && !e.altKey && !e.ctrlKey) {
+    if (e.code === 'BracketLeft')       dir = -1;
+    else if (e.code === 'BracketRight') dir = 1;
+  }
+  if (!dir) return;
+  if (!_termHotkeyChatActive()) return;
+  if (!st.terminalOpen) return;
+  if (_renamingTabId) return;
+  e.preventDefault();
+  e.stopPropagation();
+  switchTerminalTab(dir);
+}, true);
+
+// F2: rename the current tab (xterm doesn't bind F2 and bash doesn't either).
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'F2' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+  if (!st.terminalOpen) return;
+  if (!terminalHasFocus()) return;
+  if (_renamingTabId) return;
+  if (!_activeTabId) return;
+  e.preventDefault();
+  e.stopPropagation();
+  startRenameTab(_activeTabId);
+}, true);
 
 // Shift+Tab: toggle auto-accept tool calls.
 document.addEventListener('keydown', (e) => {
@@ -5895,7 +6963,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
   if (!st.chatInFlight) return;
   if (!chatHotkeyAvailable()) return;
-  if (st.pickerOpen || st.promptPickerOpen) return;
+  if (st.pickerOpen || st.promptPickerOpen || st.atPickerOpen) return;
   const slash = document.getElementById('slash-popup');
   if (slash && slash.classList.contains('open')) return;
   e.preventDefault();
