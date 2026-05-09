@@ -288,6 +288,13 @@
       </div>
       <p class="static-hint" id="mode-status-hint" style="margin:6px 0 10px"></p>
       <div class="card" id="builtin-list"></div>
+
+      <div class="sec-hdr">
+        <div class="sec-title">MCP Servers</div>
+        <button type="button" class="act-btn" id="mcp-add-btn" onclick="addMcpServer()">+ Add server</button>
+      </div>
+      <p class="static-hint" style="margin:0 0 10px">Configure <strong>Model Context Protocol</strong> servers below the built-in tools. Each running server contributes its own tools, namespaced as <code>mcp__&lt;server&gt;__&lt;tool&gt;</code> so they never collide with built-ins. Tool permissions are part of the mode currently selected above — by default, MCP tools <em>ask</em> before running. Use the controls on each server to start, stop, or restart it; the tool list is discovered via the MCP <code>tools/list</code> handshake.</p>
+      <div id="mcp-servers-list"></div>
     </div>
 
     <div class="settings-pane" id="pane-ignore">
@@ -366,6 +373,32 @@ const mimiApi = {
   async saveSampling(p)  { if (this.has()) { try { await window.pywebview.api.save_sampling(p); } catch (e) { console.error(e); } } },
   async saveModes(p)     { if (this.has()) { try { await window.pywebview.api.save_modes(p); } catch (e) { console.error(e); } } },
   async saveIgnore(p)    { if (this.has()) { try { await window.pywebview.api.save_ignore(p); } catch (e) { console.error(e); } } },
+  async saveMcp(p)       { if (this.has()) { try { await window.pywebview.api.save_mcp(p); } catch (e) { console.error(e); } } },
+  async mcpStatus(serverId) {
+    if (!this.has()) return null;
+    try { return await window.pywebview.api.mcp_status(serverId || ''); }
+    catch (e) { console.error('mcp_status failed', e); return null; }
+  },
+  async mcpStart(serverId) {
+    if (!this.has()) return { id: serverId, state: 'error', tools: [], error: 'No backend bridge.' };
+    try { return await window.pywebview.api.mcp_start(serverId); }
+    catch (e) { console.error('mcp_start failed', e); return { id: serverId, state: 'error', tools: [], error: String(e) }; }
+  },
+  async mcpStop(serverId) {
+    if (!this.has()) return { id: serverId, state: 'stopped', tools: [], error: '' };
+    try { return await window.pywebview.api.mcp_stop(serverId); }
+    catch (e) { console.error('mcp_stop failed', e); return { id: serverId, state: 'error', tools: [], error: String(e) }; }
+  },
+  async mcpRestart(serverId) {
+    if (!this.has()) return { id: serverId, state: 'error', tools: [], error: 'No backend bridge.' };
+    try { return await window.pywebview.api.mcp_restart(serverId); }
+    catch (e) { console.error('mcp_restart failed', e); return { id: serverId, state: 'error', tools: [], error: String(e) }; }
+  },
+  async mcpCall(serverId, toolName, args) {
+    if (!this.has()) return { ok: false, error: 'No backend bridge available.' };
+    try { return await window.pywebview.api.mcp_call(serverId, toolName, args || {}); }
+    catch (e) { console.error('mcp_call failed', e); return { ok: false, error: String(e) }; }
+  },
   async addRecentDir(p) {
     if (!this.has()) return RECENT_DIRS;
     try { return (await window.pywebview.api.add_recent_dir(p)) || RECENT_DIRS; }
@@ -476,12 +509,27 @@ function snapshotIgnoreForSave() {
     patterns: (IGNORE_STATE.patterns || []).slice(),
   };
 }
+function snapshotMcpForSave() {
+  return {
+    servers: (MCP_SERVERS || []).map(s => ({
+      id: s.id,
+      name: s.name,
+      command: s.command || '',
+      args: Array.isArray(s.args) ? s.args.slice() : [],
+      env: { ...(s.env || {}) },
+      cwd: s.cwd || '',
+      enabled: s.enabled !== false,
+      autostart: !!s.autostart,
+    })),
+  };
+}
 
 const persistConfigSoon   = _debounce(() => mimiApi.saveConfig(snapshotConfigForSave()), 200);
 const persistPromptsSoon  = _debounce(() => mimiApi.savePrompts(snapshotPromptsForSave()), 200);
 const persistSamplingSoon = _debounce(() => mimiApi.saveSampling(snapshotSamplingForSave()), 200);
 const persistModesSoon    = _debounce(() => mimiApi.saveModes(snapshotModesForSave()), 100);
 const persistIgnoreSoon   = _debounce(() => mimiApi.saveIgnore(snapshotIgnoreForSave()), 250);
+const persistMcpSoon      = _debounce(() => mimiApi.saveMcp(snapshotMcpForSave()), 200);
 
 function applyHydratedState(blob) {
   if (!blob || typeof blob !== 'object') return;
@@ -567,6 +615,22 @@ function applyHydratedState(blob) {
     ? ig.patterns.filter(s => typeof s === 'string')
     : [];
   IGNORE_DEFAULTS = Array.isArray(ig.defaults) ? ig.defaults.slice() : [];
+
+  const mcpBlob = blob.mcp || {};
+  if (Array.isArray(mcpBlob.servers)) {
+    MCP_SERVERS = mcpBlob.servers
+      .filter(s => s && typeof s === 'object' && s.id)
+      .map(s => ({
+        id: String(s.id),
+        name: String(s.name || s.id),
+        command: String(s.command || ''),
+        args: Array.isArray(s.args) ? s.args.map(String) : [],
+        env: (s.env && typeof s.env === 'object') ? { ...s.env } : {},
+        cwd: String(s.cwd || ''),
+        enabled: s.enabled !== false,
+        autostart: !!s.autostart,
+      }));
+  }
 
   // Terminal panel: restore stashed height + drawer-open state. Tabs themselves
   // can't persist (PTY processes die with the app); we just bring back the
@@ -660,6 +724,33 @@ let MODES = [
 /** Built-in modes' shipped tool perms — used by "Restore defaults" in settings.
  *  Keyed by mode id; populated from load_all so the backend stays canonical. */
 let MODE_BUILTIN_DEFAULTS = {};
+
+/** MCP servers configured by the user. Persisted to ~/.mimi-chat/mcp.json.
+ *  Each entry: { id, name, command, args[], env{}, cwd, enabled, autostart }. */
+let MCP_SERVERS = [];
+
+/** Per-server runtime state (not persisted). Keyed by server id.
+ *  Each entry: { state: 'stopped'|'starting'|'ready'|'error', tools: [{name, description, inputSchema}], error, serverInfo, stderrTail }. */
+const MCP_STATUS = {};
+
+/** Encode a (server, tool) pair as the wire name sent to the model. Mirrors
+ *  the backend helper in mcp_client.py — keep them in sync. */
+function mcpToolWireName(serverId, toolName) {
+  return 'mcp__' + serverId + '__' + toolName;
+}
+function parseMcpToolWireName(name) {
+  if (typeof name !== 'string' || !name.startsWith('mcp__')) return null;
+  const rest = name.slice(5);
+  const sep = rest.indexOf('__');
+  if (sep <= 0 || sep >= rest.length - 2) return null;
+  return { serverId: rest.slice(0, sep), toolName: rest.slice(sep + 2) };
+}
+/** Tools that came back from a `tools/list` for a server in the ready state. */
+function mcpReadyTools(serverId) {
+  const st = MCP_STATUS[serverId];
+  if (!st || st.state !== 'ready' || !Array.isArray(st.tools)) return [];
+  return st.tools;
+}
 
 function getActiveMode() {
   return MODES.find(m => m.id === st.modeId) || MODES[0];
@@ -2447,7 +2538,7 @@ const TOOL_PARAM_SCHEMAS = {
 };
 
 function buildToolsPayload() {
-  return builtinTools
+  const out = builtinTools
     .filter((t) => getActivePerm(t.id) !== 'disabled')
     .map((t) => ({
       type: 'function',
@@ -2457,6 +2548,25 @@ function buildToolsPayload() {
         parameters: TOOL_PARAM_SCHEMAS[t.name] || { type: 'object', properties: {}, additionalProperties: true },
       },
     }));
+  // Append tools from each MCP server that's ready and enabled, namespaced so
+  // collisions across servers (or with built-ins) are impossible.
+  for (const srv of MCP_SERVERS) {
+    if (!srv || srv.enabled === false) continue;
+    const tools = mcpReadyTools(srv.id);
+    for (const t of tools) {
+      const wireName = mcpToolWireName(srv.id, t.name);
+      if (getActivePerm(wireName) === 'disabled') continue;
+      const schema = (t.inputSchema && typeof t.inputSchema === 'object')
+        ? t.inputSchema
+        : { type: 'object', properties: {}, additionalProperties: true };
+      const desc = t.description ? `[${srv.name}] ${t.description}` : `MCP tool from server ${srv.name}.`;
+      out.push({
+        type: 'function',
+        function: { name: wireName, description: desc, parameters: schema },
+      });
+    }
+  }
+  return out;
 }
 
 function _formatBytes(n) {
@@ -2629,6 +2739,106 @@ function _renderToolArgsForError(info) {
   return out.join('');
 }
 
+function _mcpContentBlockKindLabel(c) {
+  const t = (c && c.type) || 'unknown';
+  if (t === 'text') return 'text';
+  if (t === 'image') return 'image';
+  if (t === 'audio') return 'audio';
+  if (t === 'resource') return 'resource';
+  return t;
+}
+
+function _mcpPreviewSnippet(content) {
+  // First text/resource block, truncated to a single line for the closed view.
+  if (!Array.isArray(content)) return '';
+  for (const c of content) {
+    if (!c || typeof c !== 'object') continue;
+    if (c.type === 'text' && typeof c.text === 'string') {
+      const flat = c.text.replace(/\s+/g, ' ').trim();
+      if (flat) return flat.length > 220 ? flat.slice(0, 220) + '…' : flat;
+    }
+    if (c.type === 'resource' && c.resource) {
+      const uri = c.resource.uri || c.resource.name || '';
+      if (uri) return `resource: ${uri}`;
+    }
+  }
+  return '';
+}
+
+function _renderMcpContentBlock(c) {
+  if (!c || typeof c !== 'object') return '';
+  const t = c.type || 'unknown';
+  if (t === 'text') {
+    const txt = typeof c.text === 'string' ? c.text : JSON.stringify(c, null, 2);
+    return `<div class="mcp-block mcp-block-text">${_hljsCodeBlock(txt, '')}</div>`;
+  }
+  if (t === 'image') {
+    const mime = c.mimeType || 'image/png';
+    const data = c.data || '';
+    if (!data) return `<div class="mcp-block tool-card-note">(image with no data)</div>`;
+    const src = `data:${mime};base64,${data}`;
+    return `<div class="mcp-block mcp-block-image"><img alt="MCP image" src="${esc(src)}"></div>`;
+  }
+  if (t === 'resource') {
+    const r = c.resource || {};
+    const uri = r.uri || '';
+    const mime = r.mimeType || '';
+    let body = '';
+    if (typeof r.text === 'string') {
+      body = _hljsCodeBlock(r.text, '');
+    } else if (typeof r.blob === 'string') {
+      body = `<div class="tool-card-note">binary blob (${esc(mime || 'unknown mime')}, ${r.blob.length} chars b64)</div>`;
+    }
+    return `<div class="mcp-block mcp-block-resource">`
+      + _toolCardKv('uri', uri)
+      + (mime ? _toolCardKv('mimeType', mime) : '')
+      + body
+      + `</div>`;
+  }
+  // Unknown block: dump as JSON.
+  return `<div class="mcp-block mcp-block-unknown">${_hljsCodeBlock(JSON.stringify(c, null, 2), 'json')}</div>`;
+}
+
+function _renderMcpResultBody(i) {
+  const content = Array.isArray(i.content) ? i.content : [];
+  const isError = !!i.isError;
+  const argsPretty = JSON.stringify(i.args || {}, null, 2);
+  const snippet = _mcpPreviewSnippet(content);
+
+  let head = _toolCardKv('server', i.serverName || i.serverId || '')
+    + _toolCardKv('tool', i.name || '');
+  if (isError) {
+    head += `<div class="tool-card-warn">tool reported an error</div>`;
+  }
+  const blockSummary = content.length
+    ? content.map(_mcpContentBlockKindLabel).join(' · ')
+    : '(no content)';
+  head += _toolCardKv('content', `${content.length} block${content.length === 1 ? '' : 's'} · ${blockSummary}`);
+
+  const previewLine = snippet
+    ? `<div class="mcp-preview-snippet">${esc(snippet)}</div>`
+    : `<div class="mcp-preview-snippet mcp-preview-snippet-faint">(open to view raw output)</div>`;
+
+  const blocks = content.map(_renderMcpContentBlock).join('') ||
+    `<div class="tool-card-note">no content</div>`;
+
+  // <details> gives us native, accessible collapse/uncollapse keyed off the
+  // disclosure marker. Default: closed (matches the user's "show preview"
+  // ask). The details element preserves its open state across re-renders
+  // because that lives on the DOM node — but cards in this app re-render on
+  // virtualization remount, so users may see it close again after scrolling.
+  return head
+    + previewLine
+    + `<details class="mcp-result-details">`
+    +   `<summary>show full output</summary>`
+    +   `<div class="mcp-result-blocks">${blocks}</div>`
+    +   `<div class="mcp-result-args">`
+    +     `<div class="tool-card-row-block"><span class="tool-card-k">arguments</span></div>`
+    +     _hljsCodeBlock(argsPretty, 'json')
+    +   `</div>`
+    + `</details>`;
+}
+
 function _renderToolCardBody(info, errorMsg) {
   const i = info && typeof info === 'object' ? info : {};
   const kind = i.kind || i.name || 'tool';
@@ -2740,6 +2950,21 @@ function _renderToolCardBody(info, errorMsg) {
     }
     return s;
   }
+  if (kind === 'mcp_call') {
+    const argsPretty = JSON.stringify(i.args || {}, null, 2);
+    let s = _toolCardKv('server', i.serverName || i.serverId || '')
+      + _toolCardKv('tool', i.name || '');
+    if (i.description) {
+      s += `<div class="tool-card-row-block"><span class="tool-card-k">description</span></div>`
+        + `<div class="tool-card-mcp-desc">${esc(i.description)}</div>`;
+    }
+    s += `<div class="tool-card-row-block"><span class="tool-card-k">arguments</span></div>`
+      + _hljsCodeBlock(argsPretty, 'json');
+    return s;
+  }
+  if (kind === 'mcp_result') {
+    return _renderMcpResultBody(i);
+  }
   if (kind === 'fuzzy_find_contents') {
     let s = _toolCardKv('query', i.query || '')
       + _toolCardKv('limit', String(i.limit ?? ''));
@@ -2773,6 +2998,34 @@ function _renderToolCardBody(info, errorMsg) {
 function _buildToolCopyText(info, errorMsg) {
   const i = info && typeof info === 'object' ? info : {};
   const kind = i.kind || i.name || 'tool';
+  if (kind === 'mcp_result' || kind === 'mcp_call') {
+    const lines = [
+      `${kind === 'mcp_result' ? 'MCP result' : 'MCP call'}: ${i.serverName || i.serverId || ''} · ${i.name || ''}`,
+    ];
+    if (i.args && Object.keys(i.args).length) {
+      lines.push('arguments:');
+      lines.push(JSON.stringify(i.args, null, 2));
+    }
+    if (kind === 'mcp_result') {
+      const content = Array.isArray(i.content) ? i.content : [];
+      for (const c of content) {
+        if (!c || typeof c !== 'object') continue;
+        if (c.type === 'text' && typeof c.text === 'string') {
+          lines.push('--- text ---');
+          lines.push(c.text);
+        } else if (c.type === 'resource' && c.resource) {
+          lines.push(`--- resource: ${c.resource.uri || ''} ---`);
+          if (typeof c.resource.text === 'string') lines.push(c.resource.text);
+        } else {
+          lines.push(`--- ${c.type || 'unknown'} block ---`);
+          lines.push(JSON.stringify(c, null, 2));
+        }
+      }
+      if (i.isError) lines.push('(tool reported an error)');
+    }
+    if (errorMsg) lines.push(`error: ${errorMsg}`);
+    return lines.join('\n');
+  }
   const parts = [kind];
   for (const [k, v] of Object.entries(i)) {
     if (k === 'kind' || k === 'name') continue;
@@ -2827,12 +3080,34 @@ function appendToolCard(info, decision, denyReason, errorMsg, timing) {
 }
 
 function toolMetaByFunctionName(name) {
-  return builtinTools.find((x) => x.name === name);
+  const builtin = builtinTools.find((x) => x.name === name);
+  if (builtin) return { kind: 'builtin', id: builtin.id, name: builtin.name, desc: builtin.desc };
+  const mcp = parseMcpToolWireName(name);
+  if (!mcp) return null;
+  const srv = MCP_SERVERS.find(s => s.id === mcp.serverId);
+  if (!srv || srv.enabled === false) return null;
+  // Tool only resolves while the server is ready and reports it. We still
+  // return a meta record so the UI can render a "tool stopped" failure card
+  // instead of routing to the unknown-tool branch.
+  const tools = mcpReadyTools(mcp.serverId);
+  const tool = tools.find(t => t.name === mcp.toolName) || null;
+  return {
+    kind: 'mcp',
+    id: name,
+    name,
+    serverId: mcp.serverId,
+    serverName: srv.name,
+    toolName: mcp.toolName,
+    desc: tool ? (tool.description || '') : '',
+    schema: tool ? (tool.inputSchema || null) : null,
+    available: !!tool,
+  };
 }
 
 /** @returns {'allow'|'deny'|'need_ask'} */
 function classifyToolGate(meta, name) {
   if (!meta) return 'deny';
+  if (meta.kind === 'mcp' && !meta.available) return 'deny';
   const perm = getActivePerm(meta.id);
   if (perm === 'disabled') return 'deny';
   if (perm === 'allow') return 'allow';
@@ -3900,9 +4175,14 @@ async function runAgentLoop(userText) {
           }
 
           if (gate === 'deny') {
-            const reason = meta
-              ? `Tool "${name}" is turned off in Settings → Tools.`
-              : `Unknown tool "${name}" (not in built-in list).`;
+            let reason;
+            if (!meta) {
+              reason = `Unknown tool "${name}" (not in built-in list and no MCP server provides it).`;
+            } else if (meta.kind === 'mcp' && !meta.available) {
+              reason = `MCP tool "${name}" is unavailable — server "${meta.serverName}" is not running. Start it from Settings → Tools.`;
+            } else {
+              reason = `Tool "${name}" is turned off in Settings → Tools.`;
+            }
             const modelMsg = formatToolErrorForModel(name, reason, 'permanent');
             st.conversationMessages.push({
               role: 'tool',
@@ -3924,21 +4204,38 @@ async function runAgentLoop(userText) {
             continue;
           }
 
+          const isMcp = meta && meta.kind === 'mcp';
           const projectDir = st.projectDir || '';
           const toolT0 = performance.now();
-          const previewResp = await mimiApi.toolPreview(name, parsedArgs, projectDir);
-          if (!previewResp || previewResp.ok !== true) {
-            const errMsg = (previewResp && previewResp.error) || 'Tool preview failed.';
-            const modelMsg = formatToolErrorForModel(name, errMsg, 'retry');
-            st.conversationMessages.push({
-              role: 'tool',
-              tool_call_id: tc.id,
-              content: modelMsg,
-            });
-            appendToolCard({ kind: name, ...parsedArgs }, 'error', '', modelMsg, { genMs: _tgMs, genTokens: _tgTok, execMs: performance.now() - toolT0 });
-            continue;
+
+          let previewInfo;
+          if (isMcp) {
+            // MCP servers don't have a dry-run; the preview card is just the
+            // call signature so the user knows what they're approving.
+            previewInfo = {
+              kind: 'mcp_call',
+              name: meta.toolName,
+              wireName: name,
+              serverId: meta.serverId,
+              serverName: meta.serverName,
+              description: meta.desc || '',
+              args: parsedArgs,
+            };
+          } else {
+            const previewResp = await mimiApi.toolPreview(name, parsedArgs, projectDir);
+            if (!previewResp || previewResp.ok !== true) {
+              const errMsg = (previewResp && previewResp.error) || 'Tool preview failed.';
+              const modelMsg = formatToolErrorForModel(name, errMsg, 'retry');
+              st.conversationMessages.push({
+                role: 'tool',
+                tool_call_id: tc.id,
+                content: modelMsg,
+              });
+              appendToolCard({ kind: name, ...parsedArgs }, 'error', '', modelMsg, { genMs: _tgMs, genTokens: _tgTok, execMs: performance.now() - toolT0 });
+              continue;
+            }
+            previewInfo = previewResp.preview || { kind: name };
           }
-          const previewInfo = previewResp.preview || { kind: name };
 
           if (gate === 'need_ask') {
             if (signal.aborted) {
@@ -3947,7 +4244,9 @@ async function runAgentLoop(userText) {
             }
             const perm = await requestToolPermission({
               name,
-              desc: meta ? meta.desc : '',
+              // MCP tools render their description inside the card body, so
+              // skip the modal-sub blurb to avoid duplicating it above the card.
+              desc: (meta && meta.kind === 'mcp') ? '' : (meta ? meta.desc : ''),
               info: previewInfo,
             });
             const approved = perm && perm.ok === true;
@@ -3969,7 +4268,31 @@ async function runAgentLoop(userText) {
           const decision = gate === 'allow' ? 'allow-auto' : 'allow';
 
           let renderInfo, modelResult;
-          if (READ_ONLY_TOOLS.has(name)) {
+          if (isMcp) {
+            const callResp = await mimiApi.mcpCall(meta.serverId, meta.toolName, parsedArgs);
+            if (!callResp || callResp.ok !== true) {
+              const errMsg = (callResp && callResp.error) || 'MCP tool call failed.';
+              const modelMsg = formatToolErrorForModel(name, errMsg, 'retry');
+              st.conversationMessages.push({
+                role: 'tool',
+                tool_call_id: tc.id,
+                content: modelMsg,
+              });
+              appendToolCard(previewInfo, 'error', '', modelMsg, { genMs: _tgMs, genTokens: _tgTok, execMs: performance.now() - toolT0 });
+              continue;
+            }
+            const rawResult = callResp.result || {};
+            renderInfo = {
+              ...previewInfo,
+              kind: 'mcp_result',
+              isError: !!rawResult.isError,
+              content: Array.isArray(rawResult.content) ? rawResult.content : [],
+              raw: rawResult,
+            };
+            // Models do better with the MCP-shaped JSON than with a stringified
+            // wrapper; just round-trip the raw result so they see the original.
+            modelResult = rawResult;
+          } else if (READ_ONLY_TOOLS.has(name)) {
             renderInfo = previewInfo;
             modelResult = previewInfo;
           } else {
@@ -5748,6 +6071,7 @@ function renderPrompts() {
 function renderTools() {
   renderModesToolbar();
   renderModeTools();
+  renderMcpServers();
 }
 
 function renderModesToolbar() {
@@ -5942,10 +6266,346 @@ function setModeToolPerm(toolId, perm) {
   if (!editing.tools) editing.tools = {};
   editing.tools[toolId] = perm;
   renderModeTools();
+  renderMcpServers();
   // The active mode's policy drives the chat token meter (disabled tools drop
   // out of the prompt), so re-run the badge math whenever any mode is edited.
   if (editing.id === st.modeId) updateContextBadge();
   persistModesSoon();
+}
+
+// ─── MCP SERVERS (settings tab) ──────────────────────────
+const MCP_DEFAULT_SERVER = () => ({
+  id: '',
+  name: 'New server',
+  command: '',
+  args: [],
+  env: {},
+  cwd: '',
+  enabled: true,
+  autostart: false,
+});
+
+function _mcpUniqueId(base) {
+  // ids only need to be unique within MCP_SERVERS. Slugify the name and
+  // disambiguate with a numeric suffix so the user can rename freely.
+  const seed = String(base || 'server').toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'server';
+  if (!MCP_SERVERS.some(s => s.id === seed)) return seed;
+  for (let n = 2; n < 1000; n++) {
+    const cand = `${seed}_${n}`;
+    if (!MCP_SERVERS.some(s => s.id === cand)) return cand;
+  }
+  return `${seed}_${Date.now()}`;
+}
+
+function addMcpServer() {
+  const srv = MCP_DEFAULT_SERVER();
+  srv.id = _mcpUniqueId(srv.name);
+  MCP_SERVERS.push(srv);
+  renderMcpServers({ expandId: srv.id, focusName: true });
+  persistMcpSoon();
+}
+
+// Track delete-confirm windows per server. First click arms the button;
+// a second click within MCP_DELETE_WINDOW_MS commits the delete. If the
+// timer expires, the button resets.
+const _mcpDeletePending = new Map();
+const MCP_DELETE_WINDOW_MS = 3000;
+
+function deleteMcpServer(serverId, ev) {
+  const idx = MCP_SERVERS.findIndex(s => s.id === serverId);
+  if (idx < 0) return;
+
+  const pending = _mcpDeletePending.get(serverId);
+  if (pending) {
+    clearTimeout(pending.timeoutId);
+    _mcpDeletePending.delete(serverId);
+    _performMcpDelete(serverId, idx);
+    return;
+  }
+
+  const btn = ev && ev.currentTarget instanceof HTMLElement
+    ? ev.currentTarget
+    : document.querySelector(`.mcp-card[data-server-id="${CSS.escape(serverId)}"] .mcp-del-btn`);
+  if (!btn) {
+    _performMcpDelete(serverId, idx);
+    return;
+  }
+  const originalText = btn.textContent;
+  btn.classList.add('confirming');
+  btn.textContent = 'Click again to confirm';
+  const timeoutId = setTimeout(() => {
+    _mcpDeletePending.delete(serverId);
+    if (btn.isConnected) {
+      btn.classList.remove('confirming');
+      btn.textContent = originalText;
+    }
+  }, MCP_DELETE_WINDOW_MS);
+  _mcpDeletePending.set(serverId, { timeoutId, button: btn });
+}
+
+function _performMcpDelete(serverId, idx) {
+  // Stop the running process before forgetting it; the backend cleans up async.
+  mimiApi.mcpStop(serverId).then(() => {
+    delete MCP_STATUS[serverId];
+    renderMcpServers();
+  });
+  MCP_SERVERS.splice(idx, 1);
+  // Sweep namespaced perms tied to this server out of every mode.
+  const prefix = 'mcp__' + serverId + '__';
+  for (const m of MODES) {
+    if (!m.tools) continue;
+    for (const k of Object.keys(m.tools)) {
+      if (k.startsWith(prefix)) delete m.tools[k];
+    }
+  }
+  renderMcpServers();
+  persistMcpSoon();
+  persistModesSoon();
+}
+
+async function startMcpServer(serverId) {
+  const srv = MCP_SERVERS.find(s => s.id === serverId);
+  if (!srv) return;
+  MCP_STATUS[serverId] = { ...(MCP_STATUS[serverId] || {}), state: 'starting', tools: [], error: '' };
+  renderMcpServers();
+  const status = await mimiApi.mcpStart(serverId);
+  if (status) MCP_STATUS[serverId] = status;
+  renderMcpServers();
+  // Seed any newly-discovered tools with "ask" in every mode that doesn't
+  // already have an explicit perm — this makes them appear in the editor
+  // immediately and matches the global default for new tools.
+  if (status && status.state === 'ready') seedMcpToolPerms(serverId, status.tools || []);
+}
+
+async function stopMcpServer(serverId) {
+  const status = await mimiApi.mcpStop(serverId);
+  MCP_STATUS[serverId] = status || { state: 'stopped', tools: [], error: '' };
+  renderMcpServers();
+}
+
+async function restartMcpServer(serverId) {
+  await stopMcpServer(serverId);
+  await startMcpServer(serverId);
+}
+
+function seedMcpToolPerms(serverId, tools) {
+  for (const m of MODES) {
+    if (!m.tools) m.tools = {};
+    for (const t of tools) {
+      const wire = mcpToolWireName(serverId, t.name);
+      if (m.tools[wire] == null) m.tools[wire] = 'ask';
+    }
+  }
+  persistModesSoon();
+}
+
+function setMcpServerField(serverId, field, value) {
+  const srv = MCP_SERVERS.find(s => s.id === serverId);
+  if (!srv) return;
+  if (field === 'name') {
+    srv.name = String(value || '').trim() || srv.id;
+    // Patch the visible title in place — re-rendering the card here would
+    // steal focus from the input the user is typing into.
+    const titleEl = document.querySelector(
+      `.mcp-card[data-server-id="${CSS.escape(serverId)}"] .mcp-card-title`
+    );
+    if (titleEl) titleEl.textContent = srv.name;
+  }
+  else if (field === 'command') srv.command = String(value || '').trim();
+  else if (field === 'cwd') srv.cwd = String(value || '').trim();
+  else if (field === 'args') {
+    // Args input is one-per-line in the textarea.
+    const lines = String(value || '').split('\n').map(s => s.trim()).filter(s => s !== '');
+    srv.args = lines;
+  } else if (field === 'env') {
+    // Env input is KEY=VALUE per line; blank/comment lines ignored.
+    const env = {};
+    for (const raw of String(value || '').split('\n')) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      const eq = line.indexOf('=');
+      if (eq <= 0) continue;
+      const k = line.slice(0, eq).trim();
+      const v = line.slice(eq + 1);
+      if (k) env[k] = v;
+    }
+    srv.env = env;
+  } else if (field === 'enabled') {
+    srv.enabled = !!value;
+  } else if (field === 'autostart') {
+    srv.autostart = !!value;
+  }
+  persistMcpSoon();
+}
+
+function _mcpStateBadge(state) {
+  const s = state || 'stopped';
+  const label = s === 'ready'    ? 'running'
+              : s === 'starting' ? 'starting…'
+              : s === 'error'    ? 'error'
+                                 : 'stopped';
+  return `<span class="mcp-state mcp-state-${esc(s)}">${esc(label)}</span>`;
+}
+
+function _mcpServerCardHtml(srv, status, opts) {
+  const expand = !!(opts && opts.expand);
+  const enabled = srv.enabled !== false;
+  const argsText = (srv.args || []).join('\n');
+  const envText = Object.entries(srv.env || {}).map(([k, v]) => `${k}=${v}`).join('\n');
+  const editing = getEditingMode();
+  const editingTools = (editing && editing.tools) || {};
+  const tools = Array.isArray(status.tools) ? status.tools : [];
+  const stateLine = `${_mcpStateBadge(status.state)}`
+    + (status.error ? `<span class="mcp-state-msg">${esc(status.error)}</span>` : '');
+
+  const toolsHtml = tools.length
+    ? `<div class="mcp-tool-list">${tools.map(t => {
+        const wire = mcpToolWireName(srv.id, t.name);
+        const cur = editingTools[wire] || 'ask';
+        const desc = t.description || '';
+        return `
+          <div class="tool-row mcp-tool-row">
+            <div class="tool-info">
+              <div class="tool-name">${esc(t.name)} <span class="mcp-tool-wire">· ${esc(wire)}</span></div>
+              ${desc ? `<div class="tool-desc">${esc(desc)}</div>` : ''}
+            </div>
+            <div class="perm-seg">
+              ${['ask','allow','disabled'].map(v => `<button class="perm-opt ${v}${cur===v?' on':''}" onclick="setModeToolPerm('${esc(wire)}','${v}')">${v==='disabled'?'off':v}</button>`).join('')}
+            </div>
+          </div>`;
+      }).join('')}</div>`
+    : `<div class="mcp-tool-empty">${
+        status.state === 'ready'
+          ? '(server is running but reports no tools)'
+          : status.state === 'starting'
+            ? 'Discovering tools…'
+            : status.state === 'error'
+              ? 'Server failed to start. Check the command and try again.'
+              : 'Start the server to discover its tools.'
+      }</div>`;
+
+  const stderrTail = (Array.isArray(status.stderrTail) && status.stderrTail.length)
+    ? `<details class="mcp-stderr"><summary>Recent stderr (${status.stderrTail.length} lines)</summary><pre class="mcp-stderr-pre">${esc(status.stderrTail.join('\n'))}</pre></details>`
+    : '';
+
+  const startBtnDisabled = !enabled || status.state === 'starting' ? 'disabled' : '';
+  const stopBtnDisabled = (status.state !== 'ready' && status.state !== 'starting') ? 'disabled' : '';
+  const restartBtnDisabled = !enabled || status.state === 'starting' ? 'disabled' : '';
+
+  return `
+    <div class="card mcp-card${expand ? ' mcp-card-form-expanded' : ''}" data-server-id="${esc(srv.id)}">
+      <div class="mcp-card-hdr">
+        <button type="button" class="mcp-card-caret-btn"
+          onclick="toggleMcpServerExpand('${esc(srv.id)}', event)"
+          title="${expand ? 'Hide configuration' : 'Show configuration'}"
+          aria-label="${expand ? 'Hide configuration' : 'Show configuration'}"
+          aria-expanded="${expand ? 'true' : 'false'}">
+          <span class="mcp-card-caret">${expand ? '▾' : '▸'}</span>
+        </button>
+        <span class="mcp-card-title" role="button" tabindex="0"
+          onclick="toggleMcpServerExpand('${esc(srv.id)}', event)"
+          onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleMcpServerExpand('${esc(srv.id)}', event);}"
+          title="${expand ? 'Hide configuration' : 'Show configuration'}"
+        >${esc(srv.name || srv.id)}</span>
+        <span class="mcp-card-id">id: ${esc(srv.id)}</span>
+        ${stateLine}
+        <span class="mcp-card-tool-count">${tools.length} tool${tools.length === 1 ? '' : 's'}</span>
+        <span class="mcp-card-actions">
+          <button type="button" class="act-btn" ${startBtnDisabled} onclick="startMcpServer('${esc(srv.id)}')">Start</button>
+          <button type="button" class="act-btn" ${stopBtnDisabled} onclick="stopMcpServer('${esc(srv.id)}')">Stop</button>
+          <button type="button" class="act-btn" ${restartBtnDisabled} onclick="restartMcpServer('${esc(srv.id)}')" title="Stop then start">Refresh</button>
+        </span>
+      </div>
+      ${expand ? `
+      <div class="mcp-card-form-wrap">
+        <div class="mcp-form">
+          <label class="mcp-form-row">
+            <span class="mcp-form-label">Display name</span>
+            <input type="text" class="f-input mcp-input-name" value="${esc(srv.name)}"
+              oninput="setMcpServerField('${esc(srv.id)}','name', this.value)" />
+          </label>
+          <label class="mcp-form-row">
+            <span class="mcp-form-label">Command</span>
+            <input type="text" class="f-input" value="${esc(srv.command)}" placeholder="e.g. npx or /usr/bin/uvx"
+              oninput="setMcpServerField('${esc(srv.id)}','command', this.value)" />
+          </label>
+          <label class="mcp-form-row">
+            <span class="mcp-form-label">Arguments <span class="mcp-form-hint">(one per line)</span></span>
+            <textarea class="f-input" rows="3" spellcheck="false" placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;~/projects"
+              oninput="setMcpServerField('${esc(srv.id)}','args', this.value)">${esc(argsText)}</textarea>
+          </label>
+          <label class="mcp-form-row">
+            <span class="mcp-form-label">Environment <span class="mcp-form-hint">(KEY=value per line)</span></span>
+            <textarea class="f-input" rows="3" spellcheck="false" placeholder="API_TOKEN=xxx"
+              oninput="setMcpServerField('${esc(srv.id)}','env', this.value)">${esc(envText)}</textarea>
+          </label>
+          <label class="mcp-form-row">
+            <span class="mcp-form-label">Working directory <span class="mcp-form-hint">(optional)</span></span>
+            <input type="text" class="f-input" value="${esc(srv.cwd)}" placeholder="leave empty to inherit"
+              oninput="setMcpServerField('${esc(srv.id)}','cwd', this.value)" />
+          </label>
+          <div class="mcp-form-row mcp-form-row-toggles">
+            <label class="mcp-toggle">
+              <input type="checkbox" ${enabled ? 'checked' : ''}
+                onchange="setMcpServerField('${esc(srv.id)}','enabled', this.checked)" />
+              <span>Enabled (uncheck to keep config but block tool calls)</span>
+            </label>
+            <label class="mcp-toggle">
+              <input type="checkbox" ${srv.autostart ? 'checked' : ''}
+                onchange="setMcpServerField('${esc(srv.id)}','autostart', this.checked)" />
+              <span>Auto-start on launch</span>
+            </label>
+          </div>
+          <div class="mcp-form-row mcp-form-row-buttons">
+            <button type="button" class="act-btn del mcp-del-btn" onclick="deleteMcpServer('${esc(srv.id)}', event)">Delete server</button>
+          </div>
+        </div>
+      </div>
+      ` : ''}
+      <div class="mcp-card-tools">
+        <div class="mcp-tools-hdr">
+          <span class="mcp-tools-title">Tools <span class="mcp-tools-mode">· perms set on mode "${esc(editing ? editing.name : '')}"</span></span>
+        </div>
+        ${toolsHtml}
+        ${stderrTail}
+      </div>
+    </div>
+  `;
+}
+
+const _mcpExpandedSet = new Set();
+
+function toggleMcpServerExpand(serverId, e) {
+  if (e) e.stopPropagation();
+  if (_mcpExpandedSet.has(serverId)) _mcpExpandedSet.delete(serverId);
+  else _mcpExpandedSet.add(serverId);
+  renderMcpServers();
+}
+
+function renderMcpServers(opts) {
+  const host = document.getElementById('mcp-servers-list');
+  if (!host) return;
+  if (opts && opts.expandId) _mcpExpandedSet.add(opts.expandId);
+
+  if (!MCP_SERVERS.length) {
+    host.innerHTML = `<div class="card mcp-empty">
+      <div class="mcp-empty-title">No MCP servers configured.</div>
+      <div class="mcp-empty-sub">Click <strong>+ Add server</strong> above to configure one. A typical entry uses <code>npx</code> or <code>uvx</code> as the command and the package name in arguments.</div>
+    </div>`;
+    return;
+  }
+  host.innerHTML = MCP_SERVERS.map(srv => {
+    const status = MCP_STATUS[srv.id] || { state: 'stopped', tools: [], error: '' };
+    return _mcpServerCardHtml(srv, status, { expand: _mcpExpandedSet.has(srv.id) });
+  }).join('');
+
+  if (opts && opts.focusName && opts.expandId) {
+    requestAnimationFrame(() => {
+      const card = host.querySelector(`.mcp-card[data-server-id="${CSS.escape(opts.expandId)}"]`);
+      const inp = card && card.querySelector('.mcp-input-name');
+      if (inp) { inp.focus(); inp.select(); }
+    });
+  }
 }
 
 function genModeId() {
@@ -7477,6 +8137,29 @@ async function bootMimi() {
   initSetup();
   initImageEditor();
   updateContextBadge();
+  // Spin up any MCP servers the user has flagged for auto-start. Off by
+  // default — auto-spawn could surprise users who configured a server but
+  // weren't ready for the subprocess to run yet.
+  autostartMcpServers();
+}
+
+async function autostartMcpServers() {
+  if (!mimiApi.has()) return;
+  for (const srv of MCP_SERVERS) {
+    if (!srv || srv.enabled === false || !srv.autostart) continue;
+    try {
+      const status = await mimiApi.mcpStart(srv.id);
+      if (status) MCP_STATUS[srv.id] = status;
+      if (status && status.state === 'ready') {
+        seedMcpToolPerms(srv.id, status.tools || []);
+      }
+    } catch (e) {
+      console.warn('mcp autostart failed for', srv.id, e);
+    }
+  }
+  // Refresh the settings page if it happens to be open.
+  const pane = document.getElementById('pane-tools');
+  if (pane && pane.classList.contains('active')) renderMcpServers();
 }
 
 if (window.pywebview && window.pywebview.api) {

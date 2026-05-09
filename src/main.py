@@ -3,7 +3,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import storage, terminal, tools
+from . import mcp_client, storage, terminal, tools
 
 
 class JsApi:
@@ -39,6 +39,53 @@ class JsApi:
 
     def save_ignore(self, payload):
         return storage.save_ignore(payload or {})
+
+    # ── mcp ──────────────────────────────────
+    def save_mcp(self, payload):
+        return storage.save_mcp(payload or {})
+
+    def mcp_status(self, server_id=""):
+        sid = str(server_id or "")
+        if sid:
+            return mcp_client.manager().status(sid)
+        return mcp_client.manager().status_all()
+
+    def mcp_start(self, server_id):
+        """Spawn (or restart) ``server_id`` from the persisted config."""
+        sid = str(server_id or "").strip()
+        if not sid:
+            return {"id": "", "state": "error", "tools": [], "error": "Empty server id."}
+        cfg = storage.load_mcp()
+        srv = next((s for s in cfg["servers"] if s["id"] == sid), None)
+        if not srv:
+            return {"id": sid, "state": "error", "tools": [], "error": "Server not configured."}
+        if not srv.get("enabled", True):
+            return {"id": sid, "state": "error", "tools": [], "error": "Server is disabled in settings."}
+        cwd = storage.expand_user_path(srv.get("cwd") or "") if srv.get("cwd") else ""
+        return mcp_client.manager().start(
+            sid=sid,
+            name=srv.get("name") or sid,
+            command=srv.get("command") or "",
+            args=srv.get("args") or [],
+            env=srv.get("env") or {},
+            cwd=cwd,
+        )
+
+    def mcp_stop(self, server_id):
+        sid = str(server_id or "").strip()
+        if not sid:
+            return {"id": "", "state": "stopped", "tools": [], "error": ""}
+        return mcp_client.manager().stop(sid)
+
+    def mcp_restart(self, server_id):
+        return self.mcp_start(server_id)
+
+    def mcp_call(self, server_id, tool_name, args):
+        sid = str(server_id or "").strip()
+        tn = str(tool_name or "").strip()
+        if not sid or not tn:
+            return {"ok": False, "error": "Missing server id or tool name."}
+        return mcp_client.manager().call_tool(sid, tn, args or {})
 
     def add_recent_dir(self, path):
         return storage.add_recent_dir(path or "")
@@ -413,6 +460,7 @@ def main():
 
         window.events.closing += _persist_window_geometry
         window.events.closing += terminal.shutdown_all
+        window.events.closing += mcp_client.shutdown_all
 
         _install_devtools_shortcut(window)
 

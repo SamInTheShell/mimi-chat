@@ -20,6 +20,7 @@ PROMPTS_FILE = CONFIG_DIR / "prompts.json"
 SAMPLING_FILE = CONFIG_DIR / "sampling.json"
 MODES_FILE = CONFIG_DIR / "modes.json"
 IGNORE_FILE = CONFIG_DIR / "ignore.json"
+MCP_FILE = CONFIG_DIR / "mcp.json"
 
 RECENT_DIRS_MAX = 8
 
@@ -221,7 +222,13 @@ def save_sampling(payload: dict[str, float]) -> dict[str, float]:
 
 
 def _normalize_mode_item(raw: Any) -> dict[str, Any] | None:
-    """Coerce one persisted mode entry to the canonical shape, or drop it."""
+    """Coerce one persisted mode entry to the canonical shape, or drop it.
+
+    Built-in tool ids are always present (filled from the mode's defaults
+    when missing). Extra keys — currently MCP tools, namespaced as
+    ``mcp__<server>__<tool>`` — are kept verbatim so user-set permissions
+    survive across reloads even before the MCP server is started.
+    """
     if not isinstance(raw, dict):
         return None
     mid = raw.get("id")
@@ -240,6 +247,14 @@ def _normalize_mode_item(raw: Any) -> dict[str, Any] | None:
             tools[tid] = v
         else:
             tools[tid] = seed[tid]
+    # Preserve any extra (non-builtin) keys with valid perms — e.g. mcp__server__tool.
+    for k, v in tools_raw.items():
+        if not isinstance(k, str) or not k.strip():
+            continue
+        if k in tools:
+            continue
+        if isinstance(v, str) and v in VALID_PERMS:
+            tools[k] = v
     return {"id": mid, "name": name, "builtin": is_builtin, "tools": tools}
 
 
@@ -399,6 +414,75 @@ def save_ignore(payload: dict[str, Any]) -> dict[str, Any]:
     return cur
 
 
+_MCP_SERVER_ID_RE = "abcdefghijklmnopqrstuvwxyz0123456789_-"
+
+
+def _slug_server_id(s: Any) -> str:
+    raw = str(s or "").strip().lower()
+    return "".join(c if c in _MCP_SERVER_ID_RE else "_" for c in raw)
+
+
+def _normalize_mcp_server(raw: Any) -> dict[str, Any] | None:
+    """Coerce a persisted MCP server entry to the canonical shape, or drop it."""
+    if not isinstance(raw, dict):
+        return None
+    sid = _slug_server_id(raw.get("id"))
+    if not sid:
+        return None
+    name = str(raw.get("name") or sid).strip() or sid
+    command = str(raw.get("command") or "").strip()
+    args_raw = raw.get("args")
+    args = [str(a) for a in args_raw if isinstance(a, str)] if isinstance(args_raw, list) else []
+    env_raw = raw.get("env")
+    env: dict[str, str] = {}
+    if isinstance(env_raw, dict):
+        for k, v in env_raw.items():
+            if isinstance(k, str) and k.strip():
+                env[k] = "" if v is None else str(v)
+    cwd = str(raw.get("cwd") or "").strip()
+    enabled = bool(raw.get("enabled", True))
+    autostart = bool(raw.get("autostart", False))
+    return {
+        "id": sid,
+        "name": name,
+        "command": command,
+        "args": args,
+        "env": env,
+        "cwd": cwd,
+        "enabled": enabled,
+        "autostart": autostart,
+    }
+
+
+def load_mcp() -> dict[str, Any]:
+    """Read ``mcp.json`` — the configured MCP server list."""
+    raw = _read_json(MCP_FILE, None)
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    if isinstance(raw, dict) and isinstance(raw.get("servers"), list):
+        for entry in raw["servers"]:
+            norm = _normalize_mcp_server(entry)
+            if norm and norm["id"] not in seen:
+                items.append(norm)
+                seen.add(norm["id"])
+    return {"servers": items}
+
+
+def save_mcp(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict) or not isinstance(payload.get("servers"), list):
+        return load_mcp()
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in payload["servers"]:
+        norm = _normalize_mcp_server(entry)
+        if norm and norm["id"] not in seen:
+            items.append(norm)
+            seen.add(norm["id"])
+    out = {"servers": items}
+    _atomic_write(MCP_FILE, out)
+    return out
+
+
 def load_all() -> dict[str, Any]:
     from . import ignore as _ignore  # avoid import cycle at module load
 
@@ -408,5 +492,6 @@ def load_all() -> dict[str, Any]:
         "sampling": load_sampling(),
         "modes": {**load_modes(), "builtinDefaults": builtin_mode_defaults(), "toolIds": list(TOOL_IDS)},
         "ignore": {**load_ignore(), "defaults": list(_ignore.DEFAULT_PATTERNS)},
+        "mcp": load_mcp(),
         "home": str(Path.home()),
     }
