@@ -322,6 +322,55 @@ body {
         <li><strong>Permission modes</strong> — pick a mode from the dropdown to view or edit its per-tool permissions (<em>Allow</em>, <em>Ask</em>, or <em>Off</em>). Both built-in modes are editable; <em>Restore defaults</em> rolls a built-in back to its shipped settings. Use <em>Clone</em> to seed a custom mode from the current selection, then <em>Rename</em> or <em>Delete</em> to manage it. Cycle modes from the chat with the badge or <kbd>Shift</kbd>+<kbd>Tab</kbd>.</li>
       </ul>
 
+      <h2>MCP Servers</h2>
+      <p>The <strong>MCP Servers</strong> section (under Tools in Settings) lets you connect external tool servers that speak the <strong>Model Context Protocol</strong> (MCP). Any MCP-compatible server can expose additional tools to the model alongside Mimi's built-in ones.</p>
+
+      <div class="card">
+        <div class="card-title">Adding a server</div>
+        <div class="card-body">Click <strong>+ Add server</strong> to create a new entry. Expand the card to configure it:
+          <ul>
+            <li><strong>Display name</strong> — a label for the sidebar; the server's <em>id</em> (used internally) is derived from this.</li>
+            <li><strong>Command</strong> — the executable to launch, e.g. <code>npx</code>, <code>uvx</code>, or an absolute path.</li>
+            <li><strong>Arguments</strong> — one per line. For example, <code>-y</code> on one line, then <code>@modelcontextprotocol/server-filesystem</code>, then <code>~/projects</code>.</li>
+            <li><strong>Environment</strong> — optional <code>KEY=VALUE</code> pairs, one per line. Useful for passing API tokens.</li>
+            <li><strong>Working directory</strong> — optional; leave empty to inherit the app's working directory.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Lifecycle controls</div>
+        <div class="card-body">Each server card shows a status badge (<em>running</em>, <em>starting…</em>, <em>error</em>, or <em>stopped</em>) and three buttons:
+          <ul>
+            <li><strong>Start</strong> — launches the subprocess and runs MCP handshake + tool discovery.</li>
+            <li><strong>Stop</strong> — gracefully shuts down the server process.</li>
+            <li><strong>Refresh</strong> — stops then restarts (useful after updating the server or its config).</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Toggles</div>
+        <div class="card-body">
+          <ul>
+            <li><strong>Enabled</strong> — uncheck to keep the configuration saved but block all tool calls to that server. The model won't see its tools.</li>
+            <li><strong>Auto-start</strong> — when checked, the server launches automatically when Mimi starts.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Tool discovery &amp; permissions</div>
+        <div class="card-body">Once running, the server's tools appear under the card, namespaced as <code>mcp__&lt;server_id&gt;__&lt;tool_name&gt;</code>. Each tool gets per-mode permissions (<em>Allow</em>, <em>Ask</em>, or <em>Off</em>) — newly discovered tools default to <em>Ask</em>. Edit permissions inline or from the permission-mode editor above.</div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Debugging</div>
+        <div class="card-body">If a server has emitted to stderr, a collapsible <em>Recent stderr</em> section appears at the bottom of its card showing the last few lines of output — helpful for diagnosing startup failures or runtime errors.</div>
+      </div>
+
+      <p>Server configurations are persisted in <code>~/.mimi-chat/mcp.json</code>. Deleting a server (double-click <em>Delete server</em> to confirm) stops the process and removes its tool permissions from all modes.</p>
+
       <h2>Ignore</h2>
       <p>Patterns matching these are skipped by file-listing/search tools and refused by file-touching tools. The goal is to keep small models from wasting context on caches, deps, and build outputs.</p>
       <ul>
