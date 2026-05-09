@@ -1627,6 +1627,80 @@ details.think-block.think-details[open] > summary .gen-stats-group {
   opacity: 0.45;
   cursor: not-allowed;
 }
+.modes-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.modes-toolbar .modes-dd-wrap {
+  flex: 1 1 220px;
+  min-width: 200px;
+}
+.modes-toolbar .act-btn {
+  flex: 0 0 auto;
+}
+.modes-toolbar .act-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.modes-dd-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: grab;
+  user-select: none;
+  position: relative;
+}
+.modes-dd-row:active {
+  cursor: grabbing;
+}
+.modes-dd-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-size: 12px;
+  letter-spacing: -2px;
+  cursor: grab;
+}
+.modes-dd-row:hover .modes-dd-handle {
+  color: var(--text-secondary);
+}
+.modes-dd-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.modes-dd-row.dragging {
+  opacity: 0.45;
+}
+.modes-dd-row.drop-before::before,
+.modes-dd-row.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+  pointer-events: none;
+}
+.modes-dd-row.drop-before::before {
+  top: -1px;
+}
+.modes-dd-row.drop-after::after {
+  bottom: -1px;
+}
+.dd-item.selected {
+  color: var(--accent);
+  font-weight: 600;
+}
 .prompt-tpl-wrap {
   position: relative;
 }

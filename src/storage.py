@@ -18,7 +18,7 @@ CONFIG_DIR = Path.home() / ".mimi-chat"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 PROMPTS_FILE = CONFIG_DIR / "prompts.json"
 SAMPLING_FILE = CONFIG_DIR / "sampling.json"
-TOOLS_FILE = CONFIG_DIR / "tools.json"
+MODES_FILE = CONFIG_DIR / "modes.json"
 IGNORE_FILE = CONFIG_DIR / "ignore.json"
 
 RECENT_DIRS_MAX = 8
@@ -30,7 +30,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "projectDir": "",
     "recentDirs": [],
     "thinking": True,
-    "autoAcceptEdits": False,
     "promptId": 1,
     "readFileTokenLimit": 10000,
     "windowGeometry": {"x": None, "y": None, "width": 800, "height": 750},
@@ -52,18 +51,65 @@ DEFAULT_IGNORE: dict[str, Any] = {
     "patterns": [],  # seeded from ignore.DEFAULT_PATTERNS on first load
 }
 
-DEFAULT_TOOLS: dict[str, str] = {
-    "fuzzy_find_filename": "allow",
-    "fuzzy_find_contents": "allow",
-    "list_directory":      "allow",
-    "read_file":           "allow",
-    "edit_file":           "ask",
-    "apply_patch":         "ask",
-    "append_file":         "ask",
-    "mkdir":               "ask",
-    "rm":                  "ask",
-    "move":                "ask",
-}
+TOOL_IDS: tuple[str, ...] = (
+    "fuzzy_find_filename",
+    "fuzzy_find_contents",
+    "list_directory",
+    "read_file",
+    "edit_file",
+    "apply_patch",
+    "append_file",
+    "mkdir",
+    "rm",
+    "move",
+)
+
+VALID_PERMS: frozenset[str] = frozenset({"ask", "allow", "disabled"})
+
+# Built-in mode templates. Both ship pre-populated; users can edit them and
+# "Restore defaults" to roll back, or clone them as the seed for custom modes.
+BUILTIN_MODES: tuple[dict[str, Any], ...] = (
+    {
+        "id": "default",
+        "name": "Default",
+        "tools": {
+            "fuzzy_find_filename": "allow",
+            "fuzzy_find_contents": "allow",
+            "list_directory":      "allow",
+            "read_file":           "allow",
+            "edit_file":           "ask",
+            "apply_patch":         "ask",
+            "append_file":         "ask",
+            "mkdir":               "ask",
+            "rm":                  "ask",
+            "move":                "ask",
+        },
+    },
+    {
+        "id": "accept_edits",
+        "name": "Accept Edits",
+        "tools": {tid: "allow" for tid in TOOL_IDS},
+    },
+)
+
+BUILTIN_MODE_IDS: frozenset[str] = frozenset(m["id"] for m in BUILTIN_MODES)
+
+
+def _default_modes_payload() -> dict[str, Any]:
+    return {
+        "activeId": "default",
+        "items": [
+            {"id": m["id"], "name": m["name"], "builtin": True, "tools": dict(m["tools"])}
+            for m in BUILTIN_MODES
+        ],
+    }
+
+
+def _builtin_default_tools(mode_id: str) -> dict[str, str]:
+    for m in BUILTIN_MODES:
+        if m["id"] == mode_id:
+            return dict(m["tools"])
+    return {tid: "ask" for tid in TOOL_IDS}
 
 
 def expand_user_path(p: str) -> str:
@@ -174,19 +220,110 @@ def save_sampling(payload: dict[str, float]) -> dict[str, float]:
     return cur
 
 
-def load_tools() -> dict[str, str]:
-    raw = _read_json(TOOLS_FILE, None)
+def _normalize_mode_item(raw: Any) -> dict[str, Any] | None:
+    """Coerce one persisted mode entry to the canonical shape, or drop it."""
     if not isinstance(raw, dict):
-        return dict(DEFAULT_TOOLS)
-    return {**DEFAULT_TOOLS, **{k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, str)}}
+        return None
+    mid = raw.get("id")
+    name = raw.get("name")
+    if not isinstance(mid, str) or not mid.strip():
+        return None
+    if not isinstance(name, str) or not name.strip():
+        return None
+    is_builtin = mid in BUILTIN_MODE_IDS
+    tools_raw = raw.get("tools") if isinstance(raw.get("tools"), dict) else {}
+    tools: dict[str, str] = {}
+    seed = _builtin_default_tools(mid) if is_builtin else {tid: "ask" for tid in TOOL_IDS}
+    for tid in TOOL_IDS:
+        v = tools_raw.get(tid)
+        if isinstance(v, str) and v in VALID_PERMS:
+            tools[tid] = v
+        else:
+            tools[tid] = seed[tid]
+    return {"id": mid, "name": name, "builtin": is_builtin, "tools": tools}
 
 
-def save_tools(payload: dict[str, str]) -> dict[str, str]:
-    if not isinstance(payload, dict):
-        return load_tools()
-    cleaned = {k: v for k, v in payload.items() if isinstance(k, str) and isinstance(v, str)}
-    _atomic_write(TOOLS_FILE, cleaned)
-    return cleaned
+def load_modes() -> dict[str, Any]:
+    """Load the modes catalog, ensuring both built-in modes always exist.
+
+    Schema: ``{"activeId": str, "items": [{id, name, builtin, tools}]}``.
+    Tool perm maps are filled in from the built-in defaults so a saved file
+    that pre-dates a newly added tool still loads with sane permissions.
+    """
+    raw = _read_json(MODES_FILE, None)
+    if not isinstance(raw, dict) or not isinstance(raw.get("items"), list):
+        return _default_modes_payload()
+
+    cleaned: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for entry in raw["items"]:
+        norm = _normalize_mode_item(entry)
+        if not norm or norm["id"] in seen_ids:
+            continue
+        cleaned.append(norm)
+        seen_ids.add(norm["id"])
+
+    # Re-insert any built-in mode that was deleted from the saved file. We keep
+    # them at the front so the cycle order matches the shipped order.
+    for builtin in BUILTIN_MODES:
+        if builtin["id"] not in seen_ids:
+            cleaned.insert(
+                len(seen_ids),
+                {
+                    "id": builtin["id"],
+                    "name": builtin["name"],
+                    "builtin": True,
+                    "tools": dict(builtin["tools"]),
+                },
+            )
+            seen_ids.add(builtin["id"])
+
+    active = raw.get("activeId")
+    if not isinstance(active, str) or active not in seen_ids:
+        active = "default"
+
+    return {"activeId": active, "items": cleaned}
+
+
+def save_modes(payload: dict[str, Any]) -> dict[str, Any]:
+    """Persist the modes catalog, validating + reseating built-ins if missing."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        return load_modes()
+
+    cleaned: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for entry in payload["items"]:
+        norm = _normalize_mode_item(entry)
+        if not norm or norm["id"] in seen_ids:
+            continue
+        cleaned.append(norm)
+        seen_ids.add(norm["id"])
+
+    for builtin in BUILTIN_MODES:
+        if builtin["id"] not in seen_ids:
+            cleaned.insert(
+                len(seen_ids),
+                {
+                    "id": builtin["id"],
+                    "name": builtin["name"],
+                    "builtin": True,
+                    "tools": dict(builtin["tools"]),
+                },
+            )
+            seen_ids.add(builtin["id"])
+
+    active = payload.get("activeId")
+    if not isinstance(active, str) or active not in seen_ids:
+        active = "default"
+
+    out = {"activeId": active, "items": cleaned}
+    _atomic_write(MODES_FILE, out)
+    return out
+
+
+def builtin_mode_defaults() -> dict[str, dict[str, str]]:
+    """Per-builtin-mode default tool perms, used by the frontend's Restore button."""
+    return {m["id"]: dict(m["tools"]) for m in BUILTIN_MODES}
 
 
 def add_recent_dir(path: str) -> list[str]:
@@ -269,7 +406,7 @@ def load_all() -> dict[str, Any]:
         "config": load_config(),
         "prompts": {**load_prompts(), "defaults": list(DEFAULT_PROMPTS["items"])},
         "sampling": load_sampling(),
-        "tools": load_tools(),
+        "modes": {**load_modes(), "builtinDefaults": builtin_mode_defaults(), "toolIds": list(TOOL_IDS)},
         "ignore": {**load_ignore(), "defaults": list(_ignore.DEFAULT_PATTERNS)},
         "home": str(Path.home()),
     }

@@ -34,8 +34,8 @@ class JsApi:
     def save_sampling(self, payload):
         return storage.save_sampling(payload or {})
 
-    def save_tools(self, payload):
-        return storage.save_tools(payload or {})
+    def save_modes(self, payload):
+        return storage.save_modes(payload or {})
 
     def save_ignore(self, payload):
         return storage.save_ignore(payload or {})
@@ -305,7 +305,7 @@ hotkeys:
     Enter                  Send message
     Shift+Enter            Insert a line break
     Ctrl/Cmd+T             Toggle extended thinking
-    Shift+Tab              Toggle Accept-Edits (auto-approve tool calls)
+    Shift+Tab              Cycle to the next permission mode
     Escape                 Stop the in-flight reply
     /                      Open the slash-command menu
 
@@ -315,13 +315,13 @@ hotkeys:
     Escape                 Close the menu
     /clear                 Clear conversation context
     /think                 Toggle extended thinking
-    /autoedit              Toggle Accept-Edits
+    /mode                  Open the permission-mode picker
     /model                 Open the model picker
     /system                Open the system-prompt picker
     /save-md               Export the conversation as Markdown
     /save-json             Export the raw conversation + tool payload as JSON (debug)
 
-  Model / system-prompt pickers
+  Model / system-prompt / mode pickers
     Up / Down              Move highlight
     Enter                  Select the highlighted item
     Escape                 Close the picker

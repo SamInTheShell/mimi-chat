@@ -136,6 +136,13 @@
           </div>
           <div id="prompt-picker-list"></div>
         </div>
+        <div class="model-picker" id="mode-picker">
+          <div class="picker-hdr">
+            <span>SELECT MODE</span>
+            <span class="picker-hint">↑↓ · ↵ select · esc</span>
+          </div>
+          <div id="mode-picker-list"></div>
+        </div>
       </div>
       <div class="msg-ta is-empty" id="msg-input"
         contenteditable="true"
@@ -148,7 +155,7 @@
         onpaste="handlePaste(event)"></div>
       <div class="input-bar">
         <button class="badge-btn on" id="think-badge" onclick="toggleThink()" title="Toggle extended thinking (Ctrl+T)">◈ thinking</button>
-        <button type="button" class="badge-btn" id="auto-edit-badge" onclick="toggleAutoAcceptEdits()" title="When on, every tool runs without a confirmation prompt (still sandboxed to the project directory). (Shift+Tab)">✎ Accept Edits</button>
+        <button type="button" class="badge-btn on" id="mode-badge" onclick="cycleMode()" oncontextmenu="openModePickerFromBadge(event)" title="Tool permission mode. Click to cycle to the next mode (Shift+Tab). Right-click or use /mode to open the picker."><span id="mode-badge-txt">Default</span></button>
         <button class="badge-btn on" id="prompt-badge" onclick="openPromptPicker()" title="Open the system prompt picker (Ctrl+P)"><span id="prompt-badge-txt">Default Assistant</span></button>
         <div class="ctx-badge" id="ctx-badge" title="Context use vs model limit"><b>—</b> · — / — tok</div>
         <button type="button" class="send-btn send-stop" id="stop-btn" onclick="cancelInFlightChat()" title="Stop the current reply (Esc)" hidden>stop</button>
@@ -259,10 +266,27 @@
       </div>
 
       <div class="sec-hdr">
-        <div class="sec-title">Built-in Tools</div>
-        <button type="button" class="act-btn" onclick="resetToolPermsToDefaults()">Restore defaults</button>
+        <div class="sec-title">Permission Modes</div>
       </div>
-      <p class="static-hint" style="margin:0 0 10px">All tools are sandboxed to the project directory. Defaults: read-only is allowed, mutating tools require permission. The <strong>auto-edit</strong> badge in the chat header bypasses the permission prompt for every tool while it's on.</p>
+      <p class="static-hint" style="margin:0 0 10px">All tools are sandboxed to the project directory. <strong>Modes</strong> bundle a per-tool permission policy that you can swap from the chat badge or with <code>/mode</code> (Shift+Tab cycles to the next mode). The two built-in modes — <strong>Default</strong> (mutating tools ask) and <strong>Accept Edits</strong> (everything auto-allowed) — are editable; use <em>Restore defaults</em> to roll back. Add custom modes by cloning an existing one. The order in the dropdown is the order Shift+Tab cycles through — drag rows to rearrange.</p>
+
+      <div class="modes-toolbar">
+        <div class="modes-dd-wrap sel-wrap" id="modes-dd-wrap">
+          <button type="button" class="f-select" id="modes-dd-btn" onclick="toggleModesDD(event)" style="text-align:left">
+            <span id="modes-dd-btn-txt">Default</span>
+          </button>
+          <div class="sel-arrow">▾</div>
+          <div class="dd" id="modes-dd">
+            <div class="dd-hdr">Edit mode · drag to reorder</div>
+            <div class="dd-scroll" id="modes-dd-scroll"></div>
+          </div>
+        </div>
+        <button type="button" class="act-btn" id="mode-clone-btn" onclick="cloneMode()" title="Clone the selected mode">Clone</button>
+        <button type="button" class="act-btn" id="mode-rename-btn" onclick="startRenameMode()" title="Rename the selected mode">Rename</button>
+        <button type="button" class="act-btn del" id="mode-delete-btn" onclick="deleteSelectedMode()" title="Delete the selected mode">Delete</button>
+        <button type="button" class="act-btn" id="mode-restore-btn" onclick="restoreSelectedModeDefaults()" title="Restore this built-in mode's shipped permissions">Restore defaults</button>
+      </div>
+      <p class="static-hint" id="mode-status-hint" style="margin:6px 0 10px"></p>
       <div class="card" id="builtin-list"></div>
     </div>
 
@@ -340,7 +364,7 @@ const mimiApi = {
   async saveConfig(p)    { if (this.has()) { try { await window.pywebview.api.save_config(p); } catch (e) { console.error(e); } } },
   async savePrompts(p)   { if (this.has()) { try { await window.pywebview.api.save_prompts(p); } catch (e) { console.error(e); } } },
   async saveSampling(p)  { if (this.has()) { try { await window.pywebview.api.save_sampling(p); } catch (e) { console.error(e); } } },
-  async saveTools(p)     { if (this.has()) { try { await window.pywebview.api.save_tools(p); } catch (e) { console.error(e); } } },
+  async saveModes(p)     { if (this.has()) { try { await window.pywebview.api.save_modes(p); } catch (e) { console.error(e); } } },
   async saveIgnore(p)    { if (this.has()) { try { await window.pywebview.api.save_ignore(p); } catch (e) { console.error(e); } } },
   async addRecentDir(p) {
     if (!this.has()) return RECENT_DIRS;
@@ -419,7 +443,6 @@ function snapshotConfigForSave() {
     projectDir: dir ? collapseHomeJs(dir.value) : '',
     recentDirs: Array.isArray(RECENT_DIRS) ? RECENT_DIRS.slice() : [],
     thinking: !!st.thinking,
-    autoAcceptEdits: !!st.autoAcceptEdits,
     promptId: st.promptId || 1,
     readFileTokenLimit: READ_FILE_TOKEN_LIMIT,
   };
@@ -436,10 +459,16 @@ function snapshotSamplingForSave() {
     minP: st.minP, repeatPenalty: st.repeatPenalty,
   };
 }
-function snapshotToolsForSave() {
-  const out = {};
-  for (const t of builtinTools) out[t.id] = t.perm;
-  return out;
+function snapshotModesForSave() {
+  return {
+    activeId: st.modeId,
+    items: MODES.map(m => ({
+      id: m.id,
+      name: m.name,
+      builtin: !!m.builtin,
+      tools: { ...(m.tools || {}) },
+    })),
+  };
 }
 function snapshotIgnoreForSave() {
   return {
@@ -451,7 +480,7 @@ function snapshotIgnoreForSave() {
 const persistConfigSoon   = _debounce(() => mimiApi.saveConfig(snapshotConfigForSave()), 200);
 const persistPromptsSoon  = _debounce(() => mimiApi.savePrompts(snapshotPromptsForSave()), 200);
 const persistSamplingSoon = _debounce(() => mimiApi.saveSampling(snapshotSamplingForSave()), 200);
-const persistToolsSoon    = _debounce(() => mimiApi.saveTools(snapshotToolsForSave()), 100);
+const persistModesSoon    = _debounce(() => mimiApi.saveModes(snapshotModesForSave()), 100);
 const persistIgnoreSoon   = _debounce(() => mimiApi.saveIgnore(snapshotIgnoreForSave()), 250);
 
 function applyHydratedState(blob) {
@@ -461,7 +490,6 @@ function applyHydratedState(blob) {
   const cfg = blob.config || {};
   if (cfg.provider) st.provider = cfg.provider;
   if (typeof cfg.thinking === 'boolean') st.thinking = cfg.thinking;
-  if (typeof cfg.autoAcceptEdits === 'boolean') st.autoAcceptEdits = cfg.autoAcceptEdits;
   if (cfg.model) st.model = cfg.model;
   if (Array.isArray(cfg.recentDirs)) RECENT_DIRS = cfg.recentDirs.slice();
   if (Number.isFinite(cfg.readFileTokenLimit) && cfg.readFileTokenLimit > 0) {
@@ -511,11 +539,27 @@ function applyHydratedState(blob) {
   if (Number.isFinite(samp.minP))        st.minP = samp.minP;
   if (Number.isFinite(samp.repeatPenalty)) st.repeatPenalty = samp.repeatPenalty;
 
-  const tperms = blob.tools || {};
-  for (const t of builtinTools) {
-    const v = tperms[t.id];
-    if (typeof v === 'string') t.perm = v;
+  const modesBlob = blob.modes || {};
+  if (Array.isArray(modesBlob.items) && modesBlob.items.length) {
+    MODES = modesBlob.items.map(m => ({
+      id: String(m.id || ''),
+      name: String(m.name || ''),
+      builtin: !!m.builtin,
+      tools: (m.tools && typeof m.tools === 'object') ? { ...m.tools } : {},
+    })).filter(m => m.id);
   }
+  if (modesBlob.builtinDefaults && typeof modesBlob.builtinDefaults === 'object') {
+    MODE_BUILTIN_DEFAULTS = {};
+    for (const [k, v] of Object.entries(modesBlob.builtinDefaults)) {
+      if (v && typeof v === 'object') MODE_BUILTIN_DEFAULTS[k] = { ...v };
+    }
+  }
+  if (typeof modesBlob.activeId === 'string' && MODES.some(m => m.id === modesBlob.activeId)) {
+    st.modeId = modesBlob.activeId;
+  } else if (MODES.length) {
+    st.modeId = MODES[0].id;
+  }
+  st.editingModeId = st.modeId;
 
   const ig = blob.ignore || {};
   IGNORE_STATE.honorGitignore = (typeof ig.honorGitignore === 'boolean') ? ig.honorGitignore : true;
@@ -554,7 +598,7 @@ let READ_FILE_TOKEN_LIMIT = READ_FILE_TOKEN_LIMIT_DEFAULT;
 const SLASH_CMDS = [
   {cmd:'/clear', desc:'Clear conversation context'},
   {cmd:'/think', desc:'Toggle extended thinking on / off'},
-  {cmd:'/autoedit', desc:'Toggle auto-accept for all tool calls'},
+  {cmd:'/mode', desc:'Open the permission-mode picker'},
   {cmd:'/model', desc:'Open model picker'},
   {cmd:'/system', desc:'Open system prompt picker'},
   {cmd:'/save-md',   desc:'Export conversation as Markdown'},
@@ -564,42 +608,69 @@ const SLASH_CMDS = [
 /** Tools whose preview() and execute() return identical data — call once. */
 const READ_ONLY_TOOLS = new Set(['fuzzy_find_filename', 'fuzzy_find_contents', 'list_directory', 'read_file']);
 
-/** Mirror of storage.py DEFAULT_TOOLS — read-only = allow, mutating = ask. */
-const DEFAULT_TOOL_PERMS = Object.freeze({
-  fuzzy_find_filename: 'allow',
-  fuzzy_find_contents: 'allow',
-  list_directory:      'allow',
-  read_file:           'allow',
-  edit_file:           'ask',
-  apply_patch:         'ask',
-  append_file:         'ask',
-  mkdir:               'ask',
-  rm:                  'ask',
-  move:                'ask',
-});
-
-let builtinTools = [
-  {id:'fuzzy_find_filename', name:'fuzzy_find_filename', perm:'allow',
+/** Tool catalog — id, display name, and description for the model.
+ *  Permissions live on each mode in MODES, keyed by tool id. */
+const builtinTools = [
+  {id:'fuzzy_find_filename', name:'fuzzy_find_filename',
    desc:'Find files in the project by fuzzy basename match. Args: { query: string, limit?: number }.'},
-  {id:'fuzzy_find_contents', name:'fuzzy_find_contents', perm:'allow',
+  {id:'fuzzy_find_contents', name:'fuzzy_find_contents',
    desc:'Find files in the project containing a substring. Args: { query: string, limit?: number }.'},
-  {id:'list_directory',      name:'list_directory',      perm:'allow',
+  {id:'list_directory',      name:'list_directory',
    desc:'List entries in a project directory. Args: { path?: string, depth?: integer }. depth=0 returns only direct children; depth=N descends N subdirectory levels.'},
-  {id:'read_file',           name:'read_file',           perm:'allow',
+  {id:'read_file',           name:'read_file',
    desc:'Read a project file. By default returns the whole file; if it would exceed the configured token cap, the call is refused with the file\'s total line count — re-issue with `offset` (1-based line) and `limit` (line count) to read a slice. Args: { path: string, offset?: integer, limit?: integer }.'},
-  {id:'edit_file',           name:'edit_file',           perm:'ask',
+  {id:'edit_file',           name:'edit_file',
    desc:'Edit a project file with a literal search/replace pair. The search snippet must occur exactly once. Args: { path: string, search: string, replace: string }.'},
-  {id:'apply_patch',         name:'apply_patch',         perm:'ask',
+  {id:'apply_patch',         name:'apply_patch',
    desc:'Edit a project file by applying a unified-diff patch. Use @@ hunk headers; line numbers are treated as hints. Args: { path: string, patch: string }. Prefer this tool if you naturally produce diffs; otherwise use edit_file.'},
-  {id:'append_file',         name:'append_file',         perm:'ask',
+  {id:'append_file',         name:'append_file',
    desc:'Append text to a project file (creates it if missing). Args: { path: string, content: string }.'},
-  {id:'mkdir',               name:'mkdir',               perm:'ask',
+  {id:'mkdir',               name:'mkdir',
    desc:'Create a directory in the project. Args: { path: string, recursive?: boolean }.'},
-  {id:'rm',                  name:'rm',                  perm:'ask',
+  {id:'rm',                  name:'rm',
    desc:'Remove one or more files/directories from the project. Args: { paths: string[], recursive?: boolean }. Pass several paths in a single call to delete them together; the `recursive` flag applies to every path.'},
-  {id:'move',                name:'move',                perm:'ask',
+  {id:'move',                name:'move',
    desc:'Move or rename a file or directory within the project. Args: { from: string, to: string, overwrite?: boolean }. The destination parent directory must already exist. Refuses to overwrite an existing destination unless overwrite=true (file-to-file only).'},
 ];
+
+/** Permission modes. Replaced wholesale at boot from storage; the seed below
+ *  matches the backend's BUILTIN_MODES so the chat works before load_all
+ *  finishes (e.g. when running outside pywebview). */
+let MODES = [
+  {
+    id: 'default', name: 'Default', builtin: true,
+    tools: {
+      fuzzy_find_filename:'allow', fuzzy_find_contents:'allow',
+      list_directory:'allow', read_file:'allow',
+      edit_file:'ask', apply_patch:'ask', append_file:'ask',
+      mkdir:'ask', rm:'ask', move:'ask',
+    },
+  },
+  {
+    id: 'accept_edits', name: 'Accept Edits', builtin: true,
+    tools: {
+      fuzzy_find_filename:'allow', fuzzy_find_contents:'allow',
+      list_directory:'allow', read_file:'allow',
+      edit_file:'allow', apply_patch:'allow', append_file:'allow',
+      mkdir:'allow', rm:'allow', move:'allow',
+    },
+  },
+];
+
+/** Built-in modes' shipped tool perms — used by "Restore defaults" in settings.
+ *  Keyed by mode id; populated from load_all so the backend stays canonical. */
+let MODE_BUILTIN_DEFAULTS = {};
+
+function getActiveMode() {
+  return MODES.find(m => m.id === st.modeId) || MODES[0];
+}
+function getEditingMode() {
+  return MODES.find(m => m.id === st.editingModeId) || getActiveMode();
+}
+function getActivePerm(toolId) {
+  const mode = getActiveMode();
+  return (mode && mode.tools && mode.tools[toolId]) || 'ask';
+}
 
 /** Runtime catalog (session only; reload resets to defaults). */
 // Pre-load placeholder. The real default text comes from storage.load_prompts()
@@ -627,7 +698,11 @@ const DEFAULT_SAMPLING = Object.freeze({
 });
 
 let st = {
-  provider:'ollama', model:'', projectDir:'', thinking:true, autoAcceptEdits:false,
+  provider:'ollama', model:'', projectDir:'', thinking:true,
+  modeId: 'default',
+  editingModeId: 'default',
+  modePickerIdx: 0,
+  modePickerOpen: false,
   prevScreen:'setup', slashIdx:0, pickerIdx:0, pickerOpen:false,
   promptId: 1,
   selectedPromptId: null,
@@ -1328,6 +1403,7 @@ async function startChat() {
   closeSlash();
   closeModelPicker();
   closePromptPicker();
+  closeModePicker();
   closePromptDD();
   closeRecent();
   resetChatMessages();
@@ -1339,7 +1415,7 @@ async function startChat() {
   const badge = document.getElementById('prompt-badge-txt');
   if (badge) badge.textContent = ap.name;
   showScreen('chat');
-  syncAutoAcceptBadge();
+  syncModeBadge();
   updateContextBadge();
 }
 
@@ -1349,7 +1425,7 @@ function showScreen(name) {
   document.getElementById('screen-'+name).classList.add('active');
   if (name === 'settings') renderSettings();
   if (name === 'chat') {
-    syncAutoAcceptBadge();
+    syncModeBadge();
     updateContextBadge();
     updateChatCwdBadge();
   }
@@ -1439,11 +1515,24 @@ function handleKey(e) {
     }
   }
 
+  if (st.modePickerOpen) {
+    const items = document.querySelectorAll('#mode-picker-list .picker-item');
+    if (e.key==='ArrowDown'){ e.preventDefault(); st.modePickerIdx=(st.modePickerIdx+1)%items.length; highlightModePicker(); return; }
+    if (e.key==='ArrowUp')  { e.preventDefault(); st.modePickerIdx=(st.modePickerIdx-1+items.length)%items.length; highlightModePicker(); return; }
+    if (e.key==='Escape')   { closeSlash(); closeModePicker(); clearEditor(); return; }
+    if (e.key==='Enter' && !e.shiftKey) {
+      e.preventDefault();
+      const item = items[st.modePickerIdx];
+      if (item && item.dataset.modeId) selectPickerMode(item.dataset.modeId);
+      return;
+    }
+  }
+
   if (slashOpen) {
     const items = document.querySelectorAll('#slash-popup .slash-item');
     if (e.key==='ArrowDown'){ e.preventDefault(); st.slashIdx=(st.slashIdx+1)%items.length; highlightSlash(); return; }
     if (e.key==='ArrowUp')  { e.preventDefault(); st.slashIdx=(st.slashIdx-1+items.length)%items.length; highlightSlash(); return; }
-    if (e.key==='Escape')   { closeSlash(); closeModelPicker(); closePromptPicker(); return; }
+    if (e.key==='Escape')   { closeSlash(); closeModelPicker(); closePromptPicker(); closeModePicker(); return; }
     if ((e.key==='Enter' && !e.shiftKey) || e.key==='Tab') {
       e.preventDefault();
       const item = items[st.slashIdx];
@@ -1778,6 +1867,7 @@ function handleInput() {
   if (!val.startsWith('/')) {
     if (st.pickerOpen) closeModelPicker();
     if (st.promptPickerOpen) closePromptPicker();
+    if (st.modePickerOpen) closeModePicker();
   }
   // @-trigger: open the terminal-tab picker when the caret sits in a bare
   // @filter run (no whitespace between @ and caret, @ at start or after WS).
@@ -1793,6 +1883,7 @@ function handleInput() {
 function renderSlash(cmds) {
   closeModelPicker();
   closePromptPicker();
+  closeModePicker();
   st.slashIdx = 0;
   document.getElementById('slash-popup').innerHTML = cmds.map((c,i) => `
     <div class="slash-item${i===0?' hi':''}" data-cmd="${c.cmd}" onclick="applySlash('${c.cmd}')">
@@ -1818,7 +1909,7 @@ function applySlash(cmd) {
   clearEditor();
   if (cmd === '/clear') { executeClear(); return; }
   if (cmd === '/think') { toggleThink(); return; }
-  if (cmd === '/autoedit') { toggleAutoAcceptEdits(); return; }
+  if (cmd === '/mode') { openModePicker(); return; }
   if (cmd === '/model') { openModelPicker(); return; }
   if (cmd === '/system') { openPromptPicker(); return; }
   if (cmd === '/save-md')   { executeSaveMd();   return; }
@@ -1985,7 +2076,10 @@ function buildConversationDebugJson() {
       })(),
       projectDir: st.projectDir || '',
       thinking: !!st.thinking,
-      autoAcceptEdits: !!st.autoAcceptEdits,
+      mode: (function () {
+        const m = getActiveMode();
+        return m ? { id: m.id, name: m.name, builtin: !!m.builtin } : { id: '', name: '', builtin: false };
+      })(),
       systemPromptName: st.systemPromptName || '',
       systemPromptText: st.systemPromptText || '',
       sampling: {
@@ -1999,8 +2093,8 @@ function buildConversationDebugJson() {
     },
     // What the model saw on the wire for this session.
     toolsPayload: buildToolsPayload(),
-    // Per-tool permission state, so a "denied" outcome is reproducible.
-    toolPermissions: builtinTools.map((t) => ({ id: t.id, perm: t.perm })),
+    // Per-tool permission state for the active mode, so a "denied" outcome is reproducible.
+    toolPermissions: builtinTools.map((t) => ({ id: t.id, perm: getActivePerm(t.id) })),
     // The raw in-memory message log. Preserves tool_calls.function.arguments
     // as the model emitted it (string, often JSON, sometimes malformed).
     conversationMessages: st.conversationMessages,
@@ -2227,7 +2321,7 @@ function messageForApiWire(m) {
  */
 function buildSystemMessageContent() {
   const userText = String(st.systemPromptText || '').trim();
-  const enabled = builtinTools.filter((t) => t.perm !== 'disabled').map((t) => t.name);
+  const enabled = builtinTools.filter((t) => getActivePerm(t.id) !== 'disabled').map((t) => t.name);
   let toolsBlock;
   if (enabled.length === 0) {
     toolsBlock =
@@ -2354,7 +2448,7 @@ const TOOL_PARAM_SCHEMAS = {
 
 function buildToolsPayload() {
   return builtinTools
-    .filter((t) => t.perm !== 'disabled')
+    .filter((t) => getActivePerm(t.id) !== 'disabled')
     .map((t) => ({
       type: 'function',
       function: {
@@ -2738,12 +2832,11 @@ function toolMetaByFunctionName(name) {
 
 /** @returns {'allow'|'deny'|'need_ask'} */
 function classifyToolGate(meta, name) {
-  if (!meta || meta.perm === 'disabled') return 'deny';
-  if (meta.perm === 'allow') return 'allow';
-  if (meta.perm === 'ask') {
-    if (st.autoAcceptEdits) return 'allow';
-    return 'need_ask';
-  }
+  if (!meta) return 'deny';
+  const perm = getActivePerm(meta.id);
+  if (perm === 'disabled') return 'deny';
+  if (perm === 'allow') return 'allow';
+  if (perm === 'ask') return 'need_ask';
   return 'need_ask';
 }
 
@@ -3149,7 +3242,7 @@ function focusComposerIfChat() {
   if (!chat || !chat.classList.contains('active') || !ta) return;
   const ov = document.getElementById('tool-perm-overlay');
   if (ov && ov.classList.contains('open')) return;
-  if (st.pickerOpen || st.promptPickerOpen) return;
+  if (st.pickerOpen || st.promptPickerOpen || st.modePickerOpen) return;
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       if (st.chatInFlight) return;
@@ -4858,7 +4951,7 @@ async function sendMessage() {
   const val = text.trim();
   if (val === '/clear')    { clearEditor(); executeClear();        return; }
   if (val === '/think')    { clearEditor(); toggleThink();         return; }
-  if (val === '/autoedit') { clearEditor(); toggleAutoAcceptEdits(); return; }
+  if (val === '/mode')     { clearEditor(); openModePicker();      return; }
   if (val === '/model')    { clearEditor(); openModelPicker();     return; }
   if (val === '/system')   { clearEditor(); openPromptPicker();    return; }
   if (val === '/save-md')   { clearEditor(); executeSaveMd();   return; }
@@ -4880,6 +4973,7 @@ async function sendMessage() {
   closeSlash();
   if (st.pickerOpen) closeModelPicker();
   if (st.promptPickerOpen) closePromptPicker();
+  if (st.modePickerOpen) closeModePicker();
 
   await runAgentLoop(content);
 }
@@ -5055,20 +5149,42 @@ function toggleThink() {
   persistConfigSoon();
 }
 
-function syncAutoAcceptBadge() {
-  const btn = document.getElementById('auto-edit-badge');
-  if (!btn) return;
-  btn.classList.toggle('on', st.autoAcceptEdits);
-  btn.textContent = '✎ Accept Edits';
+function syncModeBadge() {
+  const btn = document.getElementById('mode-badge');
+  const txt = document.getElementById('mode-badge-txt');
+  if (!btn || !txt) return;
+  const m = getActiveMode();
+  txt.textContent = m ? m.name : '—';
+  // The "on" class drives the highlighted treatment from .badge-btn — every
+  // mode is a valid permission policy, so the badge is always lit.
+  btn.classList.add('on');
 }
 
-function toggleAutoAcceptEdits() {
-  st.autoAcceptEdits = !st.autoAcceptEdits;
-  syncAutoAcceptBadge();
-  if (document.getElementById('screen-chat').classList.contains('active')) {
-    appendChatSysMsg(`— auto-accept tool calls ${st.autoAcceptEdits ? 'on' : 'off'} —`);
+function setActiveMode(id, opts) {
+  const m = MODES.find(x => x.id === id);
+  if (!m) return;
+  const announce = !(opts && opts.silent);
+  const changed = st.modeId !== m.id;
+  st.modeId = m.id;
+  syncModeBadge();
+  if (announce && changed && document.getElementById('screen-chat').classList.contains('active')) {
+    appendChatSysMsg(`— mode: ${m.name} —`);
   }
-  persistConfigSoon();
+  // The active mode's perms govern tool gating — keep the context badge,
+  // settings header, and modes dropdown coherent without forcing a re-render
+  // when those panes aren't visible.
+  updateContextBadge();
+  if (document.getElementById('screen-settings').classList.contains('active')) {
+    syncModesDDLabel();
+  }
+  persistModesSoon();
+}
+
+function cycleMode() {
+  if (!MODES.length) return;
+  const idx = Math.max(0, MODES.findIndex(m => m.id === st.modeId));
+  const next = MODES[(idx + 1) % MODES.length];
+  setActiveMode(next.id);
 }
 
 // ─── MODEL PICKER ──────────────────────────
@@ -5114,6 +5230,7 @@ function highlightPicker() {
 function openModelPicker() {
   closeSlash();
   if (st.promptPickerOpen) closePromptPicker();
+  if (st.modePickerOpen) closeModePicker();
   const ps = document.getElementById('model-search-picker');
   if (ps) ps.value = '';
   st.pickerIdx = 0;
@@ -5220,6 +5337,7 @@ function highlightPromptPicker() {
 function openPromptPicker() {
   closeSlash();
   closeModelPicker();
+  closeModePicker();
   renderPromptPickerList();
   st.promptPickerOpen = true;
   document.getElementById('prompt-picker').classList.add('open');
@@ -5236,6 +5354,71 @@ function selectPickerPrompt(id) {
   closePromptPicker();
 }
 
+// ─── MODE PICKER ────────────────────────────
+function renderModePickerList() {
+  const list = document.getElementById('mode-picker-list');
+  if (!list) return;
+  st.modePickerIdx = Math.max(0, MODES.findIndex(m => m.id === st.modeId));
+  list.innerHTML = MODES.map((m, i) => {
+    const summary = summarizeModePerms(m);
+    return `
+      <div class="picker-item${m.id === st.modeId ? ' cur' : ''}${i === st.modePickerIdx ? ' hi' : ''}"
+           data-mode-id="${esc(m.id)}"
+           onclick="selectPickerMode('${esc(m.id)}')">
+        <div class="picker-dot"></div>
+        <span>${esc(m.name)}${m.builtin ? '' : ' <span class="picker-meta">(custom)</span>'}</span>
+        <span class="picker-meta">${esc(summary)}</span>
+      </div>`;
+  }).join('');
+}
+
+function summarizeModePerms(mode) {
+  if (!mode || !mode.tools) return '';
+  let allow = 0, ask = 0, off = 0;
+  for (const tid of builtinTools.map(t => t.id)) {
+    const v = mode.tools[tid] || 'ask';
+    if (v === 'allow') allow++;
+    else if (v === 'disabled') off++;
+    else ask++;
+  }
+  return `${allow} allow · ${ask} ask · ${off} off`;
+}
+
+function highlightModePicker() {
+  document.querySelectorAll('#mode-picker-list .picker-item').forEach((it, i) => {
+    const on = i === st.modePickerIdx;
+    it.classList.toggle('hi', on);
+    if (on) it.scrollIntoView({ block: 'nearest' });
+  });
+}
+
+function openModePicker() {
+  closeSlash();
+  closeModelPicker();
+  closePromptPicker();
+  renderModePickerList();
+  st.modePickerOpen = true;
+  document.getElementById('mode-picker').classList.add('open');
+  document.getElementById('msg-input').focus();
+}
+
+function closeModePicker() {
+  st.modePickerOpen = false;
+  const el = document.getElementById('mode-picker');
+  if (el) el.classList.remove('open');
+}
+
+function selectPickerMode(id) {
+  setActiveMode(id);
+  closeModePicker();
+}
+
+function openModePickerFromBadge(e) {
+  if (e) { e.preventDefault(); e.stopPropagation(); }
+  if (st.modePickerOpen) closeModePicker();
+  else openModePicker();
+}
+
 // ─── SETTINGS ──────────────────────────────
 function switchTab(name, el) {
   document.querySelectorAll('.stab').forEach(t => t.classList.remove('active'));
@@ -5245,6 +5428,10 @@ function switchTab(name, el) {
 }
 
 function renderSettings() {
+  // Settings opens focused on whichever mode is active in chat — that's the
+  // policy the user just toggled or cycled into, so it's the most useful
+  // starting point for review or tweaks.
+  if (!MODES.some(m => m.id === st.editingModeId)) st.editingModeId = st.modeId;
   renderPrompts(); renderTools(); populatePromptSelect(); renderSampling(); renderIgnore(); renderReadLimits();
 }
 
@@ -5557,39 +5744,313 @@ function renderPrompts() {
   editor.appendChild(md.wrap);
 }
 
-// Tools
+// Tools / Modes
 function renderTools() {
-  document.getElementById('builtin-list').innerHTML = builtinTools.map(t => `
-    <div class="tool-row">
-      <div class="tool-info">
-        <div class="tool-name">${esc(t.name)}</div>
-        <div class="tool-desc">${esc(t.desc)}</div>
-      </div>
-      <div class="perm-seg">
-        ${['ask','allow','disabled'].map(v=>`<button class="perm-opt ${v}${t.perm===v?' on':''}" onclick="setBPerm('${t.id}','${v}')">${v==='disabled'?'off':v}</button>`).join('')}
-      </div>
-    </div>`).join('');
+  renderModesToolbar();
+  renderModeTools();
 }
 
-function setBPerm(tid, perm) {
-  const t = builtinTools.find(x => x.id===tid);
-  if (t) {
-    t.perm = perm;
-    renderTools();
-    updateContextBadge();
-    persistToolsSoon();
+function renderModesToolbar() {
+  const editing = getEditingMode();
+  if (!editing) return;
+  syncModesDDLabel();
+  renderModesDDList();
+
+  const isBuiltin = !!editing.builtin;
+  const delBtn = document.getElementById('mode-delete-btn');
+  if (delBtn) delBtn.disabled = isBuiltin;
+  const restoreBtn = document.getElementById('mode-restore-btn');
+  if (restoreBtn) restoreBtn.disabled = !isBuiltin;
+  const renameBtn = document.getElementById('mode-rename-btn');
+  if (renameBtn) renameBtn.disabled = isBuiltin;
+
+  const hint = document.getElementById('mode-status-hint');
+  if (hint) {
+    const active = (editing.id === st.modeId) ? ' · currently active in chat' : '';
+    hint.textContent = isBuiltin
+      ? `Built-in mode${active}. Edits are saved; "Restore defaults" rolls this mode back to the shipped permissions.`
+      : `Custom mode${active}. Rename or delete from the toolbar; clone any mode to seed a new one.`;
   }
 }
 
-function resetToolPermsToDefaults() {
-  for (const t of builtinTools) {
-    if (Object.prototype.hasOwnProperty.call(DEFAULT_TOOL_PERMS, t.id)) {
-      t.perm = DEFAULT_TOOL_PERMS[t.id];
-    }
+function syncModesDDLabel() {
+  const editing = getEditingMode();
+  const label = document.getElementById('modes-dd-btn-txt');
+  if (!label || !editing) return;
+  const tag = editing.builtin ? '' : ' · custom';
+  const activeTag = (editing.id === st.modeId) ? ' · active' : '';
+  label.textContent = `${editing.name}${tag}${activeTag}`;
+}
+
+function renderModesDDList() {
+  const list = document.getElementById('modes-dd-scroll');
+  if (!list) return;
+  const editing = getEditingMode();
+  list.innerHTML = '';
+  for (const m of MODES) {
+    const item = document.createElement('div');
+    item.className = 'dd-item modes-dd-row' + (editing && m.id === editing.id ? ' selected' : '');
+    item.dataset.modeId = m.id;
+    item.draggable = true;
+
+    const handle = document.createElement('span');
+    handle.className = 'modes-dd-handle';
+    handle.textContent = '⋮⋮';
+    handle.title = 'Drag to reorder';
+    item.appendChild(handle);
+
+    const label = document.createElement('span');
+    label.className = 'modes-dd-label';
+    label.textContent = m.name + (m.builtin ? '' : ' (custom)') + (m.id === st.modeId ? ' · active' : '');
+    item.appendChild(label);
+
+    item.title = m.builtin ? 'Built-in mode' : 'Custom mode';
+    item.addEventListener('click', (e) => {
+      // Ignore the click that fires after a drop — dragend already settled
+      // selection, and a stray click would re-open the dropdown after close.
+      if (item.dataset.suppressClick === '1') {
+        delete item.dataset.suppressClick;
+        return;
+      }
+      st.editingModeId = m.id;
+      closeModesDD();
+      renderTools();
+    });
+
+    item.addEventListener('dragstart', onModeDragStart);
+    item.addEventListener('dragover', onModeDragOver);
+    item.addEventListener('dragleave', onModeDragLeave);
+    item.addEventListener('drop', onModeDrop);
+    item.addEventListener('dragend', onModeDragEnd);
+
+    list.appendChild(item);
+  }
+}
+
+let _modeDragSrcId = null;
+
+function onModeDragStart(e) {
+  const row = e.currentTarget;
+  _modeDragSrcId = row.dataset.modeId || null;
+  row.classList.add('dragging');
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move';
+    // Some browsers refuse to start a drag without setData.
+    try { e.dataTransfer.setData('text/plain', _modeDragSrcId || ''); } catch (_e) {}
+  }
+}
+
+function onModeDragOver(e) {
+  if (!_modeDragSrcId) return;
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+  const row = e.currentTarget;
+  if (row.dataset.modeId === _modeDragSrcId) return;
+  // Pick top vs bottom half by mouse Y; the indicator class drives the CSS rule.
+  const rect = row.getBoundingClientRect();
+  const before = (e.clientY - rect.top) < (rect.height / 2);
+  row.classList.toggle('drop-before', before);
+  row.classList.toggle('drop-after', !before);
+}
+
+function onModeDragLeave(e) {
+  const row = e.currentTarget;
+  row.classList.remove('drop-before');
+  row.classList.remove('drop-after');
+}
+
+function onModeDrop(e) {
+  if (!_modeDragSrcId) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const row = e.currentTarget;
+  const targetId = row.dataset.modeId || null;
+  const before = row.classList.contains('drop-before');
+  row.classList.remove('drop-before');
+  row.classList.remove('drop-after');
+  if (!targetId || targetId === _modeDragSrcId) {
+    _modeDragSrcId = null;
+    return;
+  }
+  // "before <id>" means insert ahead of that mode; "after" means before the
+  // next sibling, or at end if it was the last row.
+  let beforeId;
+  if (before) {
+    beforeId = targetId;
+  } else {
+    const tIdx = MODES.findIndex(m => m.id === targetId);
+    beforeId = (tIdx >= 0 && tIdx < MODES.length - 1) ? MODES[tIdx + 1].id : '';
+  }
+  row.dataset.suppressClick = '1';
+  const movedId = _modeDragSrcId;
+  _modeDragSrcId = null;
+  reorderModeById(movedId, beforeId);
+}
+
+function onModeDragEnd(e) {
+  _modeDragSrcId = null;
+  const list = document.getElementById('modes-dd-scroll');
+  if (list) {
+    list.querySelectorAll('.modes-dd-row').forEach((r) => {
+      r.classList.remove('dragging');
+      r.classList.remove('drop-before');
+      r.classList.remove('drop-after');
+    });
+  }
+}
+
+function toggleModesDD(e) {
+  if (e) e.stopPropagation();
+  const dd = document.getElementById('modes-dd');
+  const btn = document.getElementById('modes-dd-btn');
+  if (!dd || !btn) return;
+  const willOpen = !dd.classList.contains('open');
+  if (willOpen) renderModesDDList();
+  dd.classList.toggle('open', willOpen);
+  btn.classList.toggle('open', willOpen);
+}
+
+function closeModesDD() {
+  const dd = document.getElementById('modes-dd');
+  const btn = document.getElementById('modes-dd-btn');
+  if (dd) dd.classList.remove('open');
+  if (btn) btn.classList.remove('open');
+}
+
+function renderModeTools() {
+  const editing = getEditingMode();
+  const host = document.getElementById('builtin-list');
+  if (!host || !editing) return;
+  host.innerHTML = builtinTools.map(t => {
+    const cur = (editing.tools && editing.tools[t.id]) || 'ask';
+    return `
+      <div class="tool-row">
+        <div class="tool-info">
+          <div class="tool-name">${esc(t.name)}</div>
+          <div class="tool-desc">${esc(t.desc)}</div>
+        </div>
+        <div class="perm-seg">
+          ${['ask','allow','disabled'].map(v => `<button class="perm-opt ${v}${cur===v?' on':''}" onclick="setModeToolPerm('${esc(t.id)}','${v}')">${v==='disabled'?'off':v}</button>`).join('')}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function setModeToolPerm(toolId, perm) {
+  const editing = getEditingMode();
+  if (!editing) return;
+  if (!editing.tools) editing.tools = {};
+  editing.tools[toolId] = perm;
+  renderModeTools();
+  // The active mode's policy drives the chat token meter (disabled tools drop
+  // out of the prompt), so re-run the badge math whenever any mode is edited.
+  if (editing.id === st.modeId) updateContextBadge();
+  persistModesSoon();
+}
+
+function genModeId() {
+  // ids only need to be unique within MODES; keep them human-glanceable.
+  let n = MODES.length + 1;
+  while (true) {
+    const candidate = `mode_${n}`;
+    if (!MODES.some(m => m.id === candidate)) return candidate;
+    n++;
+  }
+}
+
+function uniqueModeName(base) {
+  const taken = new Set(MODES.map(m => m.name));
+  if (!taken.has(base)) return base;
+  for (let n = 2; n < 1000; n++) {
+    const candidate = `${base} (${n})`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return `${base} (${Date.now()})`;
+}
+
+function cloneMode() {
+  const src = getEditingMode();
+  if (!src) return;
+  const id = genModeId();
+  const cloned = {
+    id,
+    name: uniqueModeName(src.name + ' (copy)'),
+    builtin: false,
+    tools: { ...(src.tools || {}) },
+  };
+  const idx = MODES.findIndex(m => m.id === src.id);
+  MODES.splice(idx + 1, 0, cloned);
+  st.editingModeId = id;
+  renderTools();
+  if (st.modePickerOpen) renderModePickerList();
+  persistModesSoon();
+}
+
+function startRenameMode() {
+  const editing = getEditingMode();
+  if (!editing || editing.builtin) return;
+  const next = window.prompt('Rename mode', editing.name);
+  if (next == null) return;
+  const trimmed = String(next).trim();
+  if (!trimmed) return;
+  if (MODES.some(m => m !== editing && m.name === trimmed)) {
+    editing.name = uniqueModeName(trimmed);
+  } else {
+    editing.name = trimmed;
   }
   renderTools();
+  if (editing.id === st.modeId) syncModeBadge();
+  if (st.modePickerOpen) renderModePickerList();
+  persistModesSoon();
+}
+
+function deleteSelectedMode() {
+  const editing = getEditingMode();
+  if (!editing || editing.builtin) return;
+  const idx = MODES.findIndex(m => m.id === editing.id);
+  if (idx < 0) return;
+  MODES.splice(idx, 1);
+  // If we just deleted the active mode, fall back to "default" so chat keeps
+  // a coherent permission policy.
+  if (st.modeId === editing.id) {
+    const fallback = MODES.find(m => m.id === 'default') || MODES[0];
+    st.modeId = fallback ? fallback.id : '';
+    syncModeBadge();
+  }
+  st.editingModeId = MODES[Math.min(idx, MODES.length - 1)]?.id || '';
+  renderTools();
+  if (st.modePickerOpen) renderModePickerList();
   updateContextBadge();
-  persistToolsSoon();
+  persistModesSoon();
+}
+
+function reorderModeById(srcId, beforeId) {
+  // beforeId === '' (or null) means drop at the end of the list.
+  if (!srcId || srcId === beforeId) return;
+  const srcIdx = MODES.findIndex(m => m.id === srcId);
+  if (srcIdx < 0) return;
+  const [m] = MODES.splice(srcIdx, 1);
+  let targetIdx;
+  if (!beforeId) {
+    targetIdx = MODES.length;
+  } else {
+    targetIdx = MODES.findIndex(x => x.id === beforeId);
+    if (targetIdx < 0) targetIdx = MODES.length;
+  }
+  MODES.splice(targetIdx, 0, m);
+  renderTools();
+  if (st.modePickerOpen) renderModePickerList();
+  persistModesSoon();
+}
+
+function restoreSelectedModeDefaults() {
+  const editing = getEditingMode();
+  if (!editing || !editing.builtin) return;
+  const seed = MODE_BUILTIN_DEFAULTS[editing.id];
+  if (seed) editing.tools = { ...seed };
+  renderModeTools();
+  if (editing.id === st.modeId) updateContextBadge();
+  persistModesSoon();
 }
 
 // Ignore patterns
@@ -5923,10 +6384,12 @@ document.addEventListener('click', e => {
   if (!e.target.closest('#dir-wrap')) closeRecent();
   if (!e.target.closest('#model-picker') && !e.target.closest('#model-badge')) closeModelPicker();
   if (!e.target.closest('#prompt-picker') && !e.target.closest('#prompt-badge')) closePromptPicker();
+  if (!e.target.closest('#mode-picker') && !e.target.closest('#mode-badge')) closeModePicker();
   if (!e.target.closest('#slash-popup') && !e.target.closest('#msg-input')) closeSlash();
   if (!e.target.closest('#at-popup') && !e.target.closest('#msg-input')) closeAtPicker();
   if (!e.target.closest('#prompt-dd-wrap')) closePromptDD();
   if (!e.target.closest('#prompt-tpl-wrap')) closePromptTemplatesDD();
+  if (!e.target.closest('#modes-dd-wrap')) closeModesDD();
 });
 
 // Ctrl/Cmd+I: focus the chat composer from anywhere on the chat screen.
@@ -6931,12 +7394,12 @@ document.addEventListener('keydown', (e) => {
   startRenameTab(_activeTabId);
 }, true);
 
-// Shift+Tab: toggle auto-accept tool calls.
+// Shift+Tab: cycle to the next permission mode.
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Tab' || !e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
   if (!chatHotkeyAvailable()) return;
   e.preventDefault();
-  toggleAutoAcceptEdits();
+  cycleMode();
 });
 
 // Ctrl/Cmd+J: jump to bottom and re-engage follow.
@@ -6963,7 +7426,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
   if (!st.chatInFlight) return;
   if (!chatHotkeyAvailable()) return;
-  if (st.pickerOpen || st.promptPickerOpen || st.atPickerOpen) return;
+  if (st.pickerOpen || st.promptPickerOpen || st.modePickerOpen || st.atPickerOpen) return;
   const slash = document.getElementById('slash-popup');
   if (slash && slash.classList.contains('open')) return;
   e.preventDefault();
