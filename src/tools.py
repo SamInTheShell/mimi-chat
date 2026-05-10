@@ -18,6 +18,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from . import ast_edit as _ast_edit
 from . import ignore as _ignore_mod
 from . import storage as _storage
 
@@ -575,6 +576,49 @@ def apply_patch_apply(root: Path, flt: _ignore_mod.IgnoreFilter, path: str, patc
     }
 
 
+def ast_edit_compute(root: Path, flt: _ignore_mod.IgnoreFilter, path: str, target: str, action: str, code: str) -> dict:
+    abs_path = _safe_join(root, path)
+    if not abs_path.exists():
+        raise ToolError(f"File does not exist: {path}")
+    if not abs_path.is_file():
+        raise ToolError(f"Path is not a file: {path}")
+    _refuse_if_ignored(flt, root, abs_path, is_dir_hint=False)
+    if not isinstance(target, str) or not target.strip():
+        raise ToolError("`target` must be a non-empty string.")
+    if not isinstance(action, str) or not action.strip():
+        raise ToolError("`action` must be a non-empty string.")
+    if abs_path.stat().st_size > DIFF_INPUT_MAX_BYTES:
+        raise ToolError("File is too large to edit safely with this tool.")
+    original, _trunc, _size = _read_text(abs_path, DIFF_INPUT_MAX_BYTES)
+    try:
+        result = _ast_edit.compute(original, path, target.strip(), action.strip(), code or "")
+    except _ast_edit.EditError as e:
+        raise ToolError(str(e))
+    posix = Path(path).as_posix()
+    return {
+        "path": posix,
+        "diff": result["diff"],
+        "added": result["added"],
+        "removed": result["removed"],
+        "_target": abs_path,
+        "_updated": result["updated"],
+    }
+
+
+def ast_edit_apply(root: Path, flt: _ignore_mod.IgnoreFilter, path: str, target: str, action: str, code: str) -> dict:
+    info = ast_edit_compute(root, flt, path, target, action, code)
+    abs_path: Path = info.pop("_target")
+    updated: str = info.pop("_updated")
+    abs_path.write_text(updated, encoding="utf-8")
+    return {
+        "path": info["path"],
+        "diff": info["diff"],
+        "added": info["added"],
+        "removed": info["removed"],
+        "bytes_written": len(updated.encode("utf-8")),
+    }
+
+
 def append_file_preview(root: Path, flt: _ignore_mod.IgnoreFilter, path: str, content: str) -> dict:
     target = _safe_join(root, path)
     if target.exists() and not target.is_file():
@@ -939,6 +983,18 @@ def preview(name: str, args: Any, root_str: str) -> dict:
         info["kind"] = "edit_file"  # render identically to edit_file in the UI
         info["variant"] = "patch"
         return info
+    if name == "ast_edit":
+        info = ast_edit_compute(
+            root, flt,
+            _arg_str(a, "path", required=True),
+            _arg_str(a, "target", required=True),
+            _arg_str(a, "action", required=True),
+            _arg_str(a, "code"),
+        )
+        info.pop("_target", None)
+        info.pop("_updated", None)
+        info["kind"] = "ast_edit"
+        return info
     if name == "append_file":
         return {"kind": name, **append_file_preview(root, flt, _arg_str(a, "path", required=True), _arg_str(a, "content"))}
     if name == "mkdir":
@@ -977,6 +1033,14 @@ def execute(name: str, args: Any, root_str: str) -> dict:
         return edit_file_apply(root, flt, _arg_str(a, "path", required=True), _arg_str(a, "search", required=True), _arg_str(a, "replace"))
     if name == "apply_patch":
         return apply_patch_apply(root, flt, _arg_str(a, "path", required=True), _arg_str(a, "patch", required=True))
+    if name == "ast_edit":
+        return ast_edit_apply(
+            root, flt,
+            _arg_str(a, "path", required=True),
+            _arg_str(a, "target", required=True),
+            _arg_str(a, "action", required=True),
+            _arg_str(a, "code"),
+        )
     if name == "append_file":
         return append_file_apply(root, flt, _arg_str(a, "path", required=True), _arg_str(a, "content"))
     if name == "mkdir":

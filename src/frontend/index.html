@@ -776,6 +776,29 @@ const builtinTools = [
    desc:'List entries in a project directory. Args: { path?: string, depth?: integer }. depth=0 returns only direct children; depth=N descends N subdirectory levels.'},
   {id:'read_file',           name:'read_file',
    desc:'Read a project file. By default returns the whole file; if it would exceed the configured token cap, the call is refused with the file\'s total line count — re-issue with `offset` (1-based line) and `limit` (line count) to read a slice. Args: { path: string, offset?: integer, limit?: integer }.'},
+  {id:'ast_edit',             name:'ast_edit',
+   desc:`Structural code editor. Edits code by targeting a symbol name or line range — NOT by pasting source text.
+
+IMPORTANT: The "target" field is a SHORT identifier or line reference. NEVER put code or long strings in "target". Put all code in the "code" field.
+
+target examples (CORRECT):
+  "init"               — targets function named init
+  "MyClass.render"     — targets method render in MyClass
+  "line:42"            — targets line 42
+  "lines:10-25"        — targets lines 10 through 25 (inclusive, clamped to file end)
+
+target examples (WRONG — do NOT do this):
+  "function init() { ... }"      — WRONG, this is code not a name
+  "document.addEventListener..." — WRONG, this is code not a name
+
+Actions:
+  "replace"       — replace the entire target with code
+  "replace_body"  — replace only the body of a function/method (keeps signature). Symbol targets only.
+  "insert_before" — insert code before the target
+  "insert_after"  — insert code after the target
+  "delete"        — remove the target (code field ignored)
+
+Indentation is adjusted automatically — write code at base indentation. Always read_file first to know the exact symbol names and line numbers.`},
   {id:'edit_file',           name:'edit_file',
    desc:'Edit a project file with a literal search/replace pair. The search snippet must occur exactly once. Args: { path: string, search: string, replace: string }.'},
   {id:'apply_patch',         name:'apply_patch',
@@ -2622,6 +2645,17 @@ const TOOL_PARAM_SCHEMAS = {
     required: ['path'],
     additionalProperties: false,
   },
+  ast_edit: {
+    type: 'object',
+    properties: {
+      path:   { type: 'string', description: 'Project-relative file path.' },
+      target: { type: 'string', description: 'A SHORT symbol name (e.g. "my_func", "MyClass.method") or line reference ("line:15", "lines:10-20"). Must be under 120 chars. NEVER put code here.' },
+      action: { type: 'string', enum: ['replace', 'replace_body', 'insert_before', 'insert_after', 'delete'], description: 'The edit operation to perform.' },
+      code:   { type: 'string', description: 'The new code to insert or replace with. Indentation is adjusted automatically. Required for all actions except delete.' },
+    },
+    required: ['path', 'target', 'action'],
+    additionalProperties: false,
+  },
   edit_file: {
     type: 'object',
     properties: {
@@ -3231,7 +3265,7 @@ function _renderToolCardBody(info, errorMsg) {
   if (kind === 'render_inline_html') {
     return _renderInlineHtmlCard(i);
   }
-  if (kind === 'edit_file') {
+  if (kind === 'edit_file' || kind === 'ast_edit') {
     return _toolCardKv('path', i.path || '')
       + _toolCardKv('change', `+${i.added || 0} −${i.removed || 0}`)
       + _renderDiffHtml(i.diff || '', _langForPath(i.path));

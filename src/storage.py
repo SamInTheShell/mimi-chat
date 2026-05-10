@@ -79,6 +79,7 @@ TOOL_IDS: tuple[str, ...] = (
     "fuzzy_find_contents",
     "list_directory",
     "read_file",
+    "ast_edit",
     "edit_file",
     "apply_patch",
     "append_file",
@@ -101,25 +102,36 @@ BUILTIN_MODES: tuple[dict[str, Any], ...] = (
             "fuzzy_find_contents": "allow",
             "list_directory":      "allow",
             "read_file":           "allow",
-            "edit_file":           "ask",
-            "apply_patch":         "ask",
+            "ast_edit":            "ask",
+            # edit_file and apply_patch are superseded by ast_edit;
+            # kept available for manual re-enablement in Settings -> Modes
+            # when needed (e.g. unusual file types not handled by ast_edit).
+            "edit_file":           "disabled",
+            "apply_patch":         "disabled",
             "append_file":         "ask",
             "mkdir":               "ask",
             "rm":                  "ask",
             "move":                "ask",
-            # render_inline_html ships off so smaller models aren't pushed
-            # toward a tool many of them struggle with. Discoverable via
-            # Settings → Modes; enabling it pairs with the Inline Designer
-            # entry in Prompt Settings (also off by default).
             "render_inline_html":  "disabled",
         },
     },
     {
         "id": "accept_edits",
         "name": "Accept Edits",
-        # Same reasoning as ``default`` — keep the inline-HTML tool gated so
-        # the user opts in explicitly.
-        "tools": {tid: ("disabled" if tid == "render_inline_html" else "allow") for tid in TOOL_IDS},
+        "tools": {
+            "fuzzy_find_filename": "allow",
+            "fuzzy_find_contents": "allow",
+            "list_directory":      "allow",
+            "read_file":           "allow",
+            "ast_edit":            "allow",
+            "edit_file":           "disabled",
+            "apply_patch":         "disabled",
+            "append_file":         "allow",
+            "mkdir":               "allow",
+            "rm":                  "allow",
+            "move":                "allow",
+            "render_inline_html":  "disabled",
+        },
     },
 )
 

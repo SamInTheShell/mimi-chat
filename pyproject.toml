@@ -9,6 +9,18 @@ dependencies = [
     "PySide6>=6.0",
     "qtpy>=2.0",
     "pathspec>=0.12",
+    "tree-sitter>=0.23",
+    "tree-sitter-python",
+    "tree-sitter-javascript",
+    "tree-sitter-typescript",
+    "tree-sitter-html",
+    "tree-sitter-css",
+    "tree-sitter-go",
+    "tree-sitter-json",
+    "tree-sitter-rust",
+    "tree-sitter-bash",
+    "tree-sitter-yaml",
+    "tree-sitter-toml",
 ]
 
 [project.scripts]
