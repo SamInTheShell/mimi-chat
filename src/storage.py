@@ -12,15 +12,17 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from .prompts import default_prompts
+from .prompts import default_prompts, DESIGNER_PROMPT_ID
 
 CONFIG_DIR = Path.home() / ".mimi-chat"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 PROMPTS_FILE = CONFIG_DIR / "prompts.json"
+PROMPT_SETTINGS_FILE = CONFIG_DIR / "prompt_settings.json"
 SAMPLING_FILE = CONFIG_DIR / "sampling.json"
 MODES_FILE = CONFIG_DIR / "modes.json"
 IGNORE_FILE = CONFIG_DIR / "ignore.json"
 MCP_FILE = CONFIG_DIR / "mcp.json"
+SYSTEM_FILE = CONFIG_DIR / "system.json"
 
 RECENT_DIRS_MAX = 8
 
@@ -38,6 +40,26 @@ DEFAULT_CONFIG: dict[str, Any] = {
 }
 
 DEFAULT_PROMPTS: dict[str, Any] = default_prompts()
+
+# Prompts the user has chosen to append to the active system prompt, in order.
+# Schema: ``{"appendItems": [{"id": int, "enabled": bool}]}``. Each entry is a
+# pinned prompt with a per-row enable toggle so the user can keep an entry in
+# the stack but temporarily disable it (useful for debugging). New installs
+# seed with the Inline Designer capability enabled; the user can remove,
+# reorder, or disable it from Settings → Prompt Settings.
+DEFAULT_PROMPT_SETTINGS: dict[str, Any] = {
+    # Pin the Inline Designer primer but ship it disabled. Pairs with the
+    # ``render_inline_html`` tool also being disabled in default modes —
+    # both flip on together when the user opts into the capability.
+    "appendItems": [{"id": DESIGNER_PROMPT_ID, "enabled": False}],
+}
+
+CLIPBOARD_TOOLS: tuple[str, ...] = ("auto", "xclip", "wl-copy", "pbcopy", "clip", "other")
+
+DEFAULT_SYSTEM_SETTINGS: dict[str, Any] = {
+    "clipboardTool": "auto",
+    "clipboardCommand": "",  # only consulted when clipboardTool == "other"
+}
 
 DEFAULT_SAMPLING: dict[str, float] = {
     "temperature": 0.7,
@@ -63,6 +85,7 @@ TOOL_IDS: tuple[str, ...] = (
     "mkdir",
     "rm",
     "move",
+    "render_inline_html",
 )
 
 VALID_PERMS: frozenset[str] = frozenset({"ask", "allow", "disabled"})
@@ -84,12 +107,19 @@ BUILTIN_MODES: tuple[dict[str, Any], ...] = (
             "mkdir":               "ask",
             "rm":                  "ask",
             "move":                "ask",
+            # render_inline_html ships off so smaller models aren't pushed
+            # toward a tool many of them struggle with. Discoverable via
+            # Settings → Modes; enabling it pairs with the Inline Designer
+            # entry in Prompt Settings (also off by default).
+            "render_inline_html":  "disabled",
         },
     },
     {
         "id": "accept_edits",
         "name": "Accept Edits",
-        "tools": {tid: "allow" for tid in TOOL_IDS},
+        # Same reasoning as ``default`` — keep the inline-HTML tool gated so
+        # the user opts in explicitly.
+        "tools": {tid: ("disabled" if tid == "render_inline_html" else "allow") for tid in TOOL_IDS},
     },
 )
 
@@ -194,18 +224,161 @@ def save_config(partial: dict[str, Any]) -> dict[str, Any]:
     return cur
 
 
+def _normalize_prompt_item(raw: Any, defaults_by_id: dict[int, dict[str, Any]]) -> dict[str, Any] | None:
+    """Coerce one persisted prompt entry to the canonical shape, or drop it.
+
+    ``cyclable`` is filled from the seed default when missing so saves that
+    pre-date the flag still keep their per-prompt cycle preference (notably
+    Inline Designer being off by default).
+    """
+    if not isinstance(raw, dict):
+        return None
+    pid = raw.get("id")
+    if not isinstance(pid, int):
+        try:
+            pid = int(pid)
+        except (TypeError, ValueError):
+            return None
+    name = raw.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return None
+    text = raw.get("text")
+    if not isinstance(text, str):
+        text = ""
+    seed = defaults_by_id.get(pid, {})
+    if "cyclable" in raw:
+        cyclable = bool(raw["cyclable"])
+    else:
+        cyclable = bool(seed.get("cyclable", True))
+    return {"id": pid, "name": name, "text": text, "cyclable": cyclable}
+
+
 def load_prompts() -> dict[str, Any]:
     raw = _read_json(PROMPTS_FILE, None)
+    defaults_by_id = {p["id"]: p for p in DEFAULT_PROMPTS["items"]}
     if not isinstance(raw, dict) or not isinstance(raw.get("items"), list):
         return DEFAULT_PROMPTS
-    return raw
+    items: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for entry in raw["items"]:
+        norm = _normalize_prompt_item(entry, defaults_by_id)
+        if norm and norm["id"] not in seen:
+            items.append(norm)
+            seen.add(norm["id"])
+    # Reseed any seeded prompt that the user hasn't deleted-and-then-saved
+    # over yet — primarily for the Inline Designer entry on upgrade from a
+    # version that didn't ship it.
+    for seed in DEFAULT_PROMPTS["items"]:
+        if seed["id"] not in seen:
+            items.append(dict(seed))
+            seen.add(seed["id"])
+    active = raw.get("activeId")
+    if not isinstance(active, int) or active not in seen:
+        active = DEFAULT_PROMPTS["activeId"]
+    return {"activeId": active, "items": items}
 
 
 def save_prompts(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
         return load_prompts()
-    _atomic_write(PROMPTS_FILE, payload)
-    return payload
+    defaults_by_id = {p["id"]: p for p in DEFAULT_PROMPTS["items"]}
+    items: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for entry in payload["items"]:
+        norm = _normalize_prompt_item(entry, defaults_by_id)
+        if norm and norm["id"] not in seen:
+            items.append(norm)
+            seen.add(norm["id"])
+    active = payload.get("activeId")
+    if not isinstance(active, int) or active not in seen:
+        active = items[0]["id"] if items else DEFAULT_PROMPTS["activeId"]
+    out = {"activeId": active, "items": items}
+    _atomic_write(PROMPTS_FILE, out)
+    return out
+
+
+def _coerce_append_items(raw: Any) -> list[dict[str, Any]]:
+    """Normalize an ``appendItems`` payload into ``[{id:int, enabled:bool}]``.
+
+    Accepts the new shape, the legacy ``appendIds`` list (treats every entry
+    as enabled), and the very-old ``appendDesigner`` toggle.
+    """
+    items: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    if isinstance(raw, dict) and isinstance(raw.get("appendItems"), list):
+        for it in raw["appendItems"]:
+            if not isinstance(it, dict):
+                continue
+            try:
+                pid = int(it.get("id"))
+            except (TypeError, ValueError):
+                continue
+            if pid in seen:
+                continue
+            enabled = bool(it.get("enabled", True))
+            items.append({"id": pid, "enabled": enabled})
+            seen.add(pid)
+        return items
+    if isinstance(raw, dict) and isinstance(raw.get("appendIds"), list):
+        for v in raw["appendIds"]:
+            try:
+                pid = int(v)
+            except (TypeError, ValueError):
+                continue
+            if pid in seen:
+                continue
+            items.append({"id": pid, "enabled": True})
+            seen.add(pid)
+        return items
+    if isinstance(raw, dict) and raw.get("appendDesigner") is True:
+        return [{"id": DESIGNER_PROMPT_ID, "enabled": True}]
+    return items
+
+
+def load_prompt_settings() -> dict[str, Any]:
+    raw = _read_json(PROMPT_SETTINGS_FILE, None)
+    if not isinstance(raw, dict):
+        return {"appendItems": [dict(it) for it in DEFAULT_PROMPT_SETTINGS["appendItems"]]}
+    return {"appendItems": _coerce_append_items(raw)}
+
+
+def save_prompt_settings(payload: dict[str, Any]) -> dict[str, Any]:
+    items = _coerce_append_items(payload if isinstance(payload, dict) else {})
+    out = {"appendItems": items}
+    _atomic_write(PROMPT_SETTINGS_FILE, out)
+    return out
+
+
+def load_system_settings() -> dict[str, Any]:
+    raw = _read_json(SYSTEM_FILE, None)
+    out = dict(DEFAULT_SYSTEM_SETTINGS)
+    if isinstance(raw, dict):
+        tool = raw.get("clipboardTool")
+        if isinstance(tool, str) and tool in CLIPBOARD_TOOLS:
+            out["clipboardTool"] = tool
+        cmd = raw.get("clipboardCommand")
+        if isinstance(cmd, str):
+            out["clipboardCommand"] = cmd
+    return out
+
+
+def save_system_settings(payload: dict[str, Any]) -> dict[str, Any]:
+    cur = load_system_settings()
+    if isinstance(payload, dict):
+        tool = payload.get("clipboardTool")
+        if isinstance(tool, str) and tool in CLIPBOARD_TOOLS:
+            cur["clipboardTool"] = tool
+        cmd = payload.get("clipboardCommand")
+        if isinstance(cmd, str):
+            cur["clipboardCommand"] = cmd
+    _atomic_write(SYSTEM_FILE, cur)
+    return cur
+
+
+def detect_clipboard_tools() -> dict[str, bool]:
+    """Probe which clipboard binaries are on PATH so the UI can flag them."""
+    import shutil
+    return {tool: shutil.which(tool) is not None for tool in ("xclip", "wl-copy", "pbcopy", "clip")}
 
 
 def load_sampling() -> dict[str, float]:
@@ -489,9 +662,15 @@ def load_all() -> dict[str, Any]:
     return {
         "config": load_config(),
         "prompts": {**load_prompts(), "defaults": list(DEFAULT_PROMPTS["items"])},
+        "promptSettings": {**load_prompt_settings(), "defaults": dict(DEFAULT_PROMPT_SETTINGS)},
         "sampling": load_sampling(),
         "modes": {**load_modes(), "builtinDefaults": builtin_mode_defaults(), "toolIds": list(TOOL_IDS)},
         "ignore": {**load_ignore(), "defaults": list(_ignore.DEFAULT_PATTERNS)},
         "mcp": load_mcp(),
+        "system": {
+            **load_system_settings(),
+            "available": detect_clipboard_tools(),
+            "tools": list(CLIPBOARD_TOOLS),
+        },
         "home": str(Path.home()),
     }

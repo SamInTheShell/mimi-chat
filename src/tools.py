@@ -25,6 +25,7 @@ DEFAULT_LIMIT = 100
 DEFAULT_READ_BYTES = 256_000          # 256 KB cap on read content
 DIFF_INPUT_MAX_BYTES = 10_000_000     # 10 MB cap for files participating in a diff
 RM_PREVIEW_CAP = 200
+RENDER_HTML_MAX_BYTES = 64 * 1024     # 64 KB cap on inline-rendered HTML payloads
 
 DEFAULT_READ_FILE_TOKEN_LIMIT = 10_000  # mirrors storage.DEFAULT_CONFIG["readFileTokenLimit"]
 READ_FILE_BYTE_CAP = 10_000_000          # hard ceiling for read_file (10 MB)
@@ -873,7 +874,36 @@ def _arg_bool(args: dict, key: str, default: bool) -> bool:
 # ── Dispatch ───────────────────────────────────
 
 
+def _render_inline_html_payload(args: Any) -> dict:
+    """Validate the ``render_inline_html`` payload and return the renderer info.
+
+    The tool is intentionally a thin passthrough: it has no filesystem access
+    and does not interpret the HTML — that is the iframe renderer's job. We
+    just enforce a size cap and basic shape so a runaway model can't drop a
+    multi-megabyte page into the conversation.
+    """
+    a = args if isinstance(args, dict) else {}
+    html = a.get("html")
+    title = a.get("title") or ""
+    if not isinstance(html, str) or not html.strip():
+        raise ToolError("render_inline_html requires a non-empty 'html' string.")
+    raw = html.encode("utf-8", "replace")
+    if len(raw) > RENDER_HTML_MAX_BYTES:
+        raise ToolError(
+            f"render_inline_html payload is {len(raw):,} bytes; the cap is {RENDER_HTML_MAX_BYTES:,}. "
+            "Trim the fragment, drop verbose comments, or split the work into a smaller render."
+        )
+    return {
+        "kind": "render_inline_html",
+        "title": str(title)[:200],
+        "html": html,
+        "bytes": len(raw),
+    }
+
+
 def preview(name: str, args: Any, root_str: str) -> dict:
+    if name == "render_inline_html":
+        return _render_inline_html_payload(args)
     root = _resolve_root(root_str)
     flt = _load_filter(root)
     a = args if isinstance(args, dict) else {}
@@ -921,6 +951,8 @@ def preview(name: str, args: Any, root_str: str) -> dict:
 
 
 def execute(name: str, args: Any, root_str: str) -> dict:
+    if name == "render_inline_html":
+        return _render_inline_html_payload(args)
     root = _resolve_root(root_str)
     flt = _load_filter(root)
     a = args if isinstance(args, dict) else {}
