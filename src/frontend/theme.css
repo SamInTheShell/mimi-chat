@@ -2657,6 +2657,163 @@ details.think-block.think-details[open] > summary .gen-stats-group {
   padding: 2px 0 2px 10px;
 }
 
+/* render_inline_html — sandboxed iframe rendered as a tool card body.
+   The frame is intentionally chrome-light: a small meta line above
+   ("title · bytes · sandboxed") doubles as a "this is AI-generated content"
+   marker so a UI rendered inside cannot impersonate the host. */
+.inline-designer {
+  margin: 2px 0 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.inline-designer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.inline-designer-meta {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  font-family: var(--mono);
+  letter-spacing: 0.02em;
+}
+.inline-designer-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+.inline-designer-btn {
+  font: inherit;
+  font-size: 11.5px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.inline-designer-btn:hover { background: var(--surface-muted); }
+.inline-designer-btn-ok { background: rgba(76, 175, 80, 0.18); border-color: rgba(76, 175, 80, 0.4); }
+.inline-designer-frame {
+  width: 100%;
+  /* Default height; replaced at runtime by the iframe's reported scrollHeight
+     (clamped) once the document inside posts back a measurement. */
+  height: 480px;
+  max-height: 90vh;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  /* color-scheme is also set inside the iframe document, but having it on
+     the element nudges the browser to render scrollbars to match. */
+  color-scheme: light dark;
+  transition: height 0.12s ease;
+}
+
+/* Settings → Prompt Settings: sortable stack of appended prompts. */
+.prompt-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.prompt-stack-empty {
+  font-size: 13px;
+  color: var(--text-faint);
+  padding: 10px 4px;
+}
+.prompt-stack-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: grab;
+  user-select: none;
+  position: relative;
+}
+.prompt-stack-row.dragging { opacity: 0.5; cursor: grabbing; }
+.prompt-stack-row.drop-before::before,
+.prompt-stack-row.drop-after::after {
+  content: "";
+  position: absolute;
+  left: 6px; right: 6px;
+  height: 2px;
+  background: var(--accent, #4caf50);
+  border-radius: 2px;
+}
+.prompt-stack-row.drop-before::before { top: -2px; }
+.prompt-stack-row.drop-after::after { bottom: -2px; }
+.prompt-stack-grip {
+  color: var(--text-faint);
+  font-size: 14px;
+  letter-spacing: -2px;
+  cursor: grab;
+}
+.prompt-stack-pos {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  min-width: 18px;
+  text-align: right;
+}
+.prompt-stack-name { flex: 1; }
+.prompt-stack-row.is-disabled .prompt-stack-name,
+.prompt-stack-row.is-disabled .prompt-stack-pos {
+  color: var(--text-faint);
+  text-decoration: line-through;
+  text-decoration-color: rgba(127,127,127,0.5);
+}
+.prompt-stack-row.is-disabled { opacity: 0.7; }
+.prompt-stack-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-faint);
+  cursor: pointer;
+  user-select: none;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.prompt-stack-toggle input { margin: 0; cursor: pointer; }
+.prompt-stack-toggle:hover { background: rgba(127,127,127,0.10); color: var(--text); }
+.prompt-stack-remove {
+  background: transparent;
+  border: 0;
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font: inherit;
+}
+.prompt-stack-remove:hover {
+  background: rgba(127,127,127,0.15);
+  color: var(--text);
+}
+.prompt-stack-toolbar {
+  display: flex;
+  gap: 8px;
+}
+
+/* Per-prompt "Cycle on Ctrl+Shift+Tab" toggle in the System Prompts editor header. */
+.prompt-cycle-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  user-select: none;
+}
+.prompt-cycle-toggle:hover { background: rgba(127,127,127,0.1); color: var(--text); }
+.prompt-cycle-toggle input { margin: 0; }
+
 /* MCP tool result cards */
 .mcp-preview-snippet {
   margin: 6px 0 4px;

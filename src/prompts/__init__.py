@@ -11,15 +11,20 @@ from typing import Any
 
 _PROMPTS_DIR = Path(__file__).parent
 
-_PROMPT_INDEX: tuple[tuple[int, str, str], ...] = (
-    (1, "Coding Agent",       "coding_agent.md"),
-    (2, "Writing Editor",     "writing_editor.md"),
-    (3, "Tutor",              "tutor.md"),
-    (4, "Brainstorm Partner", "brainstorm_partner.md"),
-    (5, "Legal Assistant",    "legal_assistant.md"),
-    (6, "Medical Assistant",  "medical_assistant.md"),
-    (7, "Financial Advisor",  "financial_advisor.md"),
-    (8, "Therapist",          "therapist.md"),
+# Each row: (id, display name, file, cyclable). ``cyclable`` is the default
+# value of the per-prompt "include in Shift+Tab cycle" flag. Capability prompts
+# (e.g. Inline Designer) ship with cyclable=False so they don't surprise the
+# user when cycling — they're still pickable from the /system menu and Ctrl+P.
+_PROMPT_INDEX: tuple[tuple[int, str, str, bool], ...] = (
+    (1, "Coding Agent",       "coding_agent.md",       True),
+    (2, "Writing Editor",     "writing_editor.md",     True),
+    (3, "Tutor",              "tutor.md",              True),
+    (4, "Brainstorm Partner", "brainstorm_partner.md", True),
+    (5, "Legal Assistant",    "legal_assistant.md",    True),
+    (6, "Medical Assistant",  "medical_assistant.md",  True),
+    (7, "Financial Advisor",  "financial_advisor.md",  True),
+    (8, "Therapist",          "therapist.md",          True),
+    (9, "Inline Designer",    "designer.md",           False),
 )
 
 
@@ -31,7 +36,11 @@ def default_prompts() -> dict[str, Any]:
                 "id": pid,
                 "name": name,
                 "text": (_PROMPTS_DIR / fname).read_text(encoding="utf-8"),
+                "cyclable": cyclable,
             }
-            for pid, name, fname in _PROMPT_INDEX
+            for pid, name, fname, cyclable in _PROMPT_INDEX
         ],
     }
+
+
+DESIGNER_PROMPT_ID = 9

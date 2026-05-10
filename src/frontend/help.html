@@ -214,7 +214,7 @@ body {
       <p>The <strong>API Endpoint</strong> field is editable for every provider — the cards just preset it. <strong>Refresh</strong> calls the server's <code>/v1/models</code> to populate the model list. If your server requires it, set the API key as an environment variable on the server side; Mimi sends an empty key by default.</p>
 
       <h2>System prompt</h2>
-      <p>Pick a starting prompt — built-in templates ship under <em>Settings → System Prompts</em>, and your custom prompts appear in the same dropdown. You can change the prompt later from the chat composer too.</p>
+      <p>Pick a starting prompt — built-in templates ship under <em>Settings → Prompts Manager</em>, and your custom prompts appear in the same dropdown. You can change the prompt later from the chat composer too.</p>
 
       <h2>Project directory</h2>
       <p>Required. This is the sandbox root for every built-in tool — file reads, edits, listings, and the embedded terminal all run inside this directory. Use <strong>Recent</strong> to jump back to a previous project, or <strong>Browse…</strong> for a native folder picker.</p>
@@ -253,6 +253,7 @@ body {
         <li><kbd>Shift</kbd>+<kbd>Tab</kbd> does the same.</li>
         <li><code>/mode</code> (or right-clicking the badge) opens a picker if you'd rather choose by name.</li>
       </ul>
+      <p><strong>Note on <code>render_inline_html</code>:</strong> both shipped modes set this tool to <em>Off</em> by default — many small models struggle with it. Flip it to <em>Allow</em> in <em>Settings → Tools</em>, and turn on the matching <strong>Inline Designer</strong> append entry under <em>Settings → Prompt Settings</em>, to enable the capability. See the <em>Inline Designer</em> section below.</p>
 
       <div class="card">
         <div class="card-title">The tool-permission modal</div>
@@ -260,7 +261,19 @@ body {
       </div>
 
       <h2>System prompts</h2>
-      <p>The prompt badge in the input bar shows the active system prompt. Click it (or <kbd>Ctrl/Cmd</kbd>+<kbd>P</kbd>, or <code>/system</code>) to switch. Manage the full library under <em>Settings → System Prompts</em>.</p>
+      <p>The prompt badge in the input bar shows the active system prompt. Click it (or <kbd>Ctrl/Cmd</kbd>+<kbd>P</kbd>, or <code>/system</code>) to switch. Manage the full library under <em>Settings → Prompts Manager</em>.</p>
+      <ul>
+        <li><kbd>Ctrl/Cmd</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd> cycles to the next prompt that has its <strong>Cycle on Ctrl+Shift+Tab</strong> toggle on. Capability primers like <em>Inline Designer</em> ship with cycle off so they don't surprise you, but they're still pickable from the picker / <code>/system</code>.</li>
+        <li>Stack additional prompts onto the active one under <em>Settings → Prompt Settings</em> — useful for layering capability primers or persona overlays without editing your main prompt.</li>
+      </ul>
+
+      <h2>Inline Designer (<code>render_inline_html</code>)</h2>
+      <p>When the <code>render_inline_html</code> tool is enabled, the model can render a self-contained HTML/CSS/JS fragment as an in-chat card — useful for infographics, small charts, layout mockups, or interactive explainers. The fragment runs in a sandboxed iframe with no network and no parent access.</p>
+      <ul>
+        <li><strong>Disabled by default.</strong> Turn the tool to <em>Allow</em> under <em>Settings → Tools</em> for whichever mode(s) should have it, and enable the matching <strong>Inline Designer</strong> append entry under <em>Settings → Prompt Settings</em> so the model knows how to use it.</li>
+        <li>Each rendered card has <strong>Copy HTML</strong> and <strong>Download</strong> buttons in its toolbar to lift the model-generated source to your clipboard or save it as a <code>.html</code> file.</li>
+        <li>The iframe auto-resizes to its content. If the card looks wrong, the underlying source is in your clipboard one click away.</li>
+      </ul>
 
       <h2>Slash commands</h2>
       <p>Type <kbd>/</kbd> at the start of an empty composer for the menu, or just type the command and send.</p>
@@ -288,7 +301,8 @@ body {
       </ul>
 
       <h2>Copy &amp; export</h2>
-      <p>Each message, thinking block, and tool card has a copy button that lifts the raw content to your clipboard. For full-conversation export, use <code>/save-md</code> or <code>/save-json</code>.</p>
+      <p>Each message, thinking block, and tool card has a copy button that lifts the raw content to your clipboard. Inline-Designer cards add <strong>Copy HTML</strong> / <strong>Download</strong>. For full-conversation export, use <code>/save-md</code> or <code>/save-json</code>.</p>
+      <p>Clipboard plumbing is configurable under <em>Settings → System</em> — useful on Linux where Wayland sessions need <code>wl-copy</code> while X11 wants <code>xclip</code>. The default is <em>Auto Detect</em> which picks the right binary based on your session.</p>
     </section>
 
     <!-- ─────────── SETTINGS ─────────── -->
@@ -296,12 +310,23 @@ body {
       <h1>Settings</h1>
       <p class="help-lede">Open from the gear button in any header or with <kbd>Ctrl/Cmd</kbd>+<kbd>,</kbd>. Same hotkey closes it. Cycle tabs with <kbd>Ctrl</kbd>+<kbd>PgUp</kbd>/<kbd>PgDn</kbd> (or <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>[</kbd>/<kbd>]</kbd> on macOS).</p>
 
-      <h2>System Prompts</h2>
+      <h2>Prompts Manager</h2>
       <p>A library of system prompts, stored under <code>~/.mimi-chat/</code>. The left pane lists prompts; the right pane is the editor.</p>
       <ul>
         <li><strong>+ Add from template</strong> seeds a new prompt from one of the built-in role templates (coding agent, writing editor, tutor, brainstorm partner, etc.).</li>
         <li><strong>+ New</strong> creates a blank prompt; <strong>Clone</strong> duplicates the selected one; <strong>Delete</strong> removes it.</li>
+        <li><strong>Cycle on Ctrl+Shift+Tab</strong> toggle in each prompt's editor header decides whether <kbd>Ctrl/Cmd</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd> visits it. Capability primers (e.g. <em>Inline Designer</em>) ship with this off — they're still pickable from <code>/system</code> / <kbd>Ctrl/Cmd</kbd>+<kbd>P</kbd>.</li>
         <li>The <em>active</em> prompt is set from the chat composer or the setup screen, not here.</li>
+      </ul>
+
+      <h2>Prompt Settings</h2>
+      <p>A sortable stack of <em>additional</em> prompts to append after the active system prompt — useful for layering capability primers or persona overlays without editing your main prompt. Each row has its own append toggle so you can keep an entry pinned but skip it for a session.</p>
+      <ul>
+        <li><strong>Drag rows</strong> to reorder. Stacked prompts are concatenated in the order shown.</li>
+        <li><strong>Append</strong> checkbox on each row — when off, the entry stays in the stack but is skipped when composing the system message. Handy for debugging or A/B-ing primers.</li>
+        <li><strong>+ Add prompt</strong> opens a menu of prompts not already pinned.</li>
+        <li>The <strong>Inline Designer</strong> entry ships pinned but with append off — flip it on (and enable <code>render_inline_html</code> in your mode) to teach the model the capability.</li>
+        <li>Edit each prompt's body in the <em>Prompts Manager</em> tab; this pane only controls stacking.</li>
       </ul>
 
       <h2>Sampling</h2>
@@ -378,6 +403,15 @@ body {
         <li><strong>Patterns</strong> — one per line, <code>.gitignore</code> syntax. Negation (<code>!</code>) and trailing-slash directory rules work like in git. <code>#</code> starts a comment.</li>
       </ul>
 
+      <h2>System</h2>
+      <p>Host-system integration knobs. The big one today is which <strong>clipboard tool</strong> Mimi shells out to for copy buttons — relevant on Linux where Wayland and X11 need different binaries.</p>
+      <ul>
+        <li><strong>Auto Detect</strong> (default) — picks <code>wl-copy</code> on Wayland, <code>xclip</code> on X11, <code>pbcopy</code> on macOS, <code>clip</code> on Windows.</li>
+        <li><strong>xclip / wl-copy / pbcopy / clip</strong> — force a specific binary if auto-detect picks wrong.</li>
+        <li><strong>Other</strong> — type any custom shell command (e.g. <code>xsel --clipboard --input</code>); the text is fed to the command on stdin.</li>
+      </ul>
+      <p>The page shows which of the standard binaries are on your <code>PATH</code> so you know what's actually available. Settings persist to <code>~/.mimi-chat/system.json</code>.</p>
+
       <h2>DevTools</h2>
       <p>The <em>DevTools</em> button in the settings header opens Chromium's bundled inspector attached to this window. <kbd>Ctrl/Cmd</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> works from anywhere in the app.</p>
     </section>
@@ -414,6 +448,7 @@ body {
           <tr><td><kbd>Ctrl/Cmd</kbd>+<kbd>T</kbd></td><td>Toggle extended thinking</td></tr>
           <tr><td><kbd>Shift</kbd>+<kbd>Tab</kbd></td><td>Cycle to the next permission mode</td></tr>
           <tr><td><kbd>Ctrl/Cmd</kbd>+<kbd>P</kbd></td><td>Toggle the system-prompt picker</td></tr>
+          <tr><td><kbd>Ctrl/Cmd</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd></td><td>Cycle to the next cyclable system prompt</td></tr>
           <tr><td><kbd>Ctrl/Cmd</kbd>+<kbd>Z</kbd> / <kbd>Y</kbd></td><td>Undo / redo composer text</td></tr>
         </table>
       </div>

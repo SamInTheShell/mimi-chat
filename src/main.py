@@ -31,6 +31,9 @@ class JsApi:
     def save_prompts(self, payload):
         return storage.save_prompts(payload or {})
 
+    def save_prompt_settings(self, payload):
+        return storage.save_prompt_settings(payload or {})
+
     def save_sampling(self, payload):
         return storage.save_sampling(payload or {})
 
@@ -39,6 +42,9 @@ class JsApi:
 
     def save_ignore(self, payload):
         return storage.save_ignore(payload or {})
+
+    def save_system_settings(self, payload):
+        return storage.save_system_settings(payload or {})
 
     # ── mcp ──────────────────────────────────
     def save_mcp(self, payload):
@@ -175,18 +181,65 @@ class JsApi:
 
     # ── clipboard ────────────────────────────
     def copy_to_clipboard(self, text):
-        """Copy text to the system clipboard (works from file:// origins)."""
-        import subprocess, sys
-        try:
+        """Copy ``text`` to the system clipboard via the user-configured tool.
+
+        On file:// origins the JS clipboard API is blocked, so we shell out.
+        Tool choice is configurable in Settings → System; "auto" probes the
+        binaries appropriate for the host OS in a sensible order.
+        """
+        import shlex
+        import subprocess
+        import sys
+
+        payload = (text or "")
+        cfg = storage.load_system_settings()
+        choice = cfg.get("clipboardTool") or "auto"
+
+        candidates: list[list[str]] = []
+        if choice == "auto":
             if sys.platform == "darwin":
-                subprocess.run(["pbcopy"], input=(text or "").encode(), check=True)
+                candidates.append(["pbcopy"])
             elif sys.platform == "win32":
-                subprocess.run(["clip"], input=(text or "").encode("utf-16-le"), check=True)
+                candidates.append(["clip"])
             else:
-                subprocess.run(["xclip", "-selection", "clipboard"], input=(text or "").encode(), check=True)
-            return True
-        except Exception:
+                # Wayland-first; fall through to X11.
+                if os.environ.get("WAYLAND_DISPLAY"):
+                    candidates.append(["wl-copy"])
+                    candidates.append(["xclip", "-selection", "clipboard"])
+                else:
+                    candidates.append(["xclip", "-selection", "clipboard"])
+                    candidates.append(["wl-copy"])
+        elif choice == "xclip":
+            candidates.append(["xclip", "-selection", "clipboard"])
+        elif choice == "wl-copy":
+            candidates.append(["wl-copy"])
+        elif choice == "pbcopy":
+            candidates.append(["pbcopy"])
+        elif choice == "clip":
+            candidates.append(["clip"])
+        elif choice == "other":
+            cmd = (cfg.get("clipboardCommand") or "").strip()
+            if not cmd:
+                return False
+            try:
+                candidates.append(shlex.split(cmd))
+            except ValueError:
+                return False
+
+        if not candidates:
             return False
+
+        for argv in candidates:
+            try:
+                # ``clip.exe`` on Windows expects UTF-16-LE on stdin.
+                enc = "utf-16-le" if argv and argv[0].lower() in ("clip", "clip.exe") else "utf-8"
+                subprocess.run(argv, input=payload.encode(enc), check=True)
+                return True
+            except FileNotFoundError:
+                continue
+            except Exception:
+                return False
+        return False
 
     # ── terminal (PTY) ───────────────────────
     def terminal_start(self, cols=80, rows=24, cwd=None):
@@ -405,6 +458,11 @@ def main():
         action="store_true",
         help="Print backend discovery and frontend-load messages to stderr.",
     )
+    parser.add_argument(
+        "--redteam",
+        action="store_true",
+        help=argparse.SUPPRESS,  # internal: open the sandbox red-team test instead of the chat UI.
+    )
     args = parser.parse_args()
 
     stderr = None
@@ -419,7 +477,8 @@ def main():
         _configure_qt_app_identity()
         import webview
 
-        html_file = Path(__file__).parent / "frontend" / "index.html"
+        html_name = "redteam.html" if args.redteam else "index.html"
+        html_file = Path(__file__).parent / "frontend" / html_name
         # as_uri() — not str() — so pywebview's is_local_url() check sees a
         # file:// scheme and skips spinning up its bundled bottle HTTP server.
         url = html_file.as_uri()
